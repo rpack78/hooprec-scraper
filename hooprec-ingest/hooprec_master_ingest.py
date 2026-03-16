@@ -50,9 +50,11 @@ BASE_URL        = "https://hooprec.com"
 PLAYERS_DIR_URL = f"{BASE_URL}/players_directory.html"
 MATCHES_DIR_URL = f"{BASE_URL}/matches_directory.html"
 
-DB_PATH     = Path(os.getenv("HOOPREC_DB",     "players.db"))
-MD_DIR      = Path(os.getenv("HOOPREC_MD_DIR", "data/hooprec_md"))
-JSON_PATH   = Path(os.getenv("HOOPREC_JSON",   "matches.json"))
+_SCRIPT_DIR = Path(__file__).parent
+
+DB_PATH     = Path(os.getenv("HOOPREC_DB",     str(_SCRIPT_DIR / "players.db")))
+MD_DIR      = Path(os.getenv("HOOPREC_MD_DIR", str(_SCRIPT_DIR / "data" / "hooprec_md")))
+JSON_PATH   = Path(os.getenv("HOOPREC_JSON",   str(_SCRIPT_DIR / "matches.json")))
 JS_DELAY    = float(os.getenv("HOOPREC_DELAY", "2.5"))
 CONCURRENCY = int(os.getenv("HOOPREC_CONCUR",  "3"))
 
@@ -224,12 +226,16 @@ async def scrape_matches_directory(
     crawler: AsyncWebCrawler,
     conn: sqlite3.Connection,
 ) -> list[dict]:
-    """Collect all match detail links. Returns list of {match_id, detail_url}."""
+    """Collect all match detail links. Returns list of {match_id, detail_url}.
+
+    Match cards use onclick handlers (window.location.href='match_detail.html?match=...')
+    rather than <a> tags, so we parse the raw HTML for onclick attributes.
+    """
     log.info("Scraping matches directory ...")
 
+    # Wait until at least one match card's onclick is present in the DOM
     wait_condition = (
-        "() => !document.querySelector('.loading-indicator') && "
-        "document.querySelectorAll('a[href*=\"match_detail\"], a[href*=\"match=\"]').length > 0"
+        "() => document.querySelectorAll('[onclick*=match_detail]').length > 0"
     )
 
     result = await crawler.arun(url=MATCHES_DIR_URL, config=run_cfg(wait_for=wait_condition))
@@ -243,16 +249,26 @@ async def scrape_matches_directory(
     matches: list[dict] = []
     seen: set[str] = set()
 
-    for link in result.links.get("internal", []):
-        href = link.get("href", "")
-        if "match" in href.lower() and "detail" in href.lower():
-            full_url = href if href.startswith("http") else urljoin(BASE_URL, href)
-            parsed = urlparse(full_url)
-            qs = parse_qs(parsed.query)
-            match_id = qs.get("match", [None])[0] or parsed.path.split("=")[-1]
-            if match_id and match_id not in seen:
-                seen.add(match_id)
-                matches.append({"match_id": match_id, "detail_url": full_url})
+    # Match cards use: onclick="window.location.href='match_detail.html?match=SLUG'"
+    _onclick_re = re.compile(r"window\.location\.href=['\"]([^'\"]*match_detail[^'\"]*)")
+
+    from bs4 import BeautifulSoup
+    soup = BeautifulSoup(result.html or "", "html.parser")
+    for tag in soup.find_all(attrs={"onclick": _onclick_re}):
+        onclick_val = tag.get("onclick", "")
+        m = _onclick_re.search(onclick_val)
+        if not m:
+            continue
+        rel_href = m.group(1)
+        full_url = rel_href if rel_href.startswith("http") else urljoin(BASE_URL, rel_href)
+        parsed = urlparse(full_url)
+        qs = parse_qs(parsed.query)
+        match_id = qs.get("match", [None])[0]
+        if not match_id:
+            match_id = parsed.path.split("=")[-1]
+        if match_id and match_id not in seen:
+            seen.add(match_id)
+            matches.append({"match_id": match_id, "detail_url": full_url})
 
     log.info("Found %d match detail links", len(matches))
     set_progress(conn, "matches_directory_count", str(len(matches)))
@@ -277,33 +293,55 @@ def _extract_youtube(text: str) -> tuple[str | None, str | None]:
     return None, None
 
 
-_SCORE_PATTERN = re.compile(r'(\d+)\s*[-–]\s*(\d+)')
+# Matches hooprec's onclick="viewPlayer('Name')" pattern
+_VIEW_PLAYER_RE = re.compile(r"viewPlayer\(['\"](.+?)['\"]\)")
+# Matches hooprec's <div class="match-score">30 - 28</div>
+_MATCH_SCORE_RE = re.compile(r'(\d+)\s*[-–]\s*(\d+)')
 
 
 def _parse_match_detail(result, match_id: str, detail_url: str) -> dict:
     """
-    Extract structured data from a match detail page result.
-    Lenient parser — hooprec's exact HTML must be confirmed at runtime.
+    Extract structured data from a match detail page.
 
-    [AGENT: after a first run, inspect result.html for the actual score element
-     and player name containers, then tighten these selectors for accuracy.]
+    Player names come from onclick="viewPlayer('Name')" divs.
+    Score comes from <div class="match-score">P1 - P2</div>.
     """
+    from bs4 import BeautifulSoup
+
     html     = result.html or ""
     markdown = result.markdown or ""
-    combined = html + "\n" + markdown
 
-    youtube_url, youtube_vid = _extract_youtube(combined)
+    youtube_url, youtube_vid = _extract_youtube(html + "\n" + markdown)
 
-    score_match = _SCORE_PATTERN.search(combined)
-    p1_score = int(score_match.group(1)) if score_match else None
-    p2_score = int(score_match.group(2)) if score_match else None
+    soup = BeautifulSoup(html, "html.parser")
 
+    # --- Scores: prefer the dedicated .match-score div ---
+    p1_score = p2_score = None
+    score_div = soup.find(class_="match-score")
+    if score_div:
+        m = _MATCH_SCORE_RE.search(score_div.get_text())
+        if m:
+            p1_score, p2_score = int(m.group(1)), int(m.group(2))
+    if p1_score is None:
+        # Fallback: first bare "N - M" in the page (avoid "Record: 0-0" etc.)
+        for tag in soup.find_all(string=_MATCH_SCORE_RE):
+            parent_text = (tag.parent.get_text(strip=True) if tag.parent else "")
+            if "record" not in parent_text.lower() and "score:" not in parent_text.lower():
+                m = _MATCH_SCORE_RE.search(str(tag))
+                if m:
+                    p1_score, p2_score = int(m.group(1)), int(m.group(2))
+                    break
+
+    # --- Player names: onclick="viewPlayer('Name')" ---
     player_names: list[str] = []
-    for link in (result.links or {}).get("internal", []):
-        href = link.get("href", "")
-        text = (link.get("text") or "").strip()
-        if "player" in href.lower() and text:
-            player_names.append(text)
+    seen_names: set[str] = set()
+    for tag in soup.find_all(attrs={"onclick": _VIEW_PLAYER_RE}):
+        m = _VIEW_PLAYER_RE.search(tag.get("onclick", ""))
+        if m:
+            name = m.group(1).strip()
+            if name and name not in seen_names:
+                seen_names.add(name)
+                player_names.append(name)
 
     p1 = player_names[0] if len(player_names) > 0 else None
     p2 = player_names[1] if len(player_names) > 1 else None
