@@ -1,0 +1,36 @@
+# =============================================================
+# HoopRec Scraper — Git Ignore
+# =============================================================
+
+# Generated scrape artifacts (reproducible by re-running the script)
+hooprec-ingest/players.db
+hooprec-ingest/matches.json
+hooprec-ingest/data/hooprec_md/
+!hooprec-ingest/data/hooprec_md/.gitkeep
+
+# Python virtual environments
+.venv/
+.venv-1/
+venv/
+env/
+
+# Python bytecode
+__pycache__/
+*.py[cod]
+*.pyo
+
+# Distribution / build
+dist/
+build/
+*.egg-info/
+
+# Environment variable files
+.env
+.env.*
+
+# OS
+.DS_Store
+Thumbs.db
+
+# VS Code
+.vscode/
