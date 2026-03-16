@@ -1,5 +1,5 @@
 -- =============================================================
--- HoopRec RAG Ingestion Schema
+-- Basketball RAG Ingestion Schema
 -- =============================================================
 
 -- Players table: one row per unique player found on the directory

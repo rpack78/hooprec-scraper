@@ -1,7 +1,7 @@
 """
 hooprec_master_ingest.py
 ========================
-Production-ready, resumeable ingestion script for hooprec.com.
+Production-ready, resumeable ingestion script for a 1v1 basketball stats site.
 
 Architecture
 ------------
@@ -65,7 +65,7 @@ logging.basicConfig(
     format="%(asctime)s  %(levelname)-8s  %(message)s",
     datefmt="%H:%M:%S",
 )
-log = logging.getLogger("hooprec")
+log = logging.getLogger("ingest")
 
 # ---------------------------------------------------------------------------
 # Database helpers
@@ -293,9 +293,9 @@ def _extract_youtube(text: str) -> tuple[str | None, str | None]:
     return None, None
 
 
-# Matches hooprec's onclick="viewPlayer('Name')" pattern
+# Player name pattern: onclick="viewPlayer('Name')"
 _VIEW_PLAYER_RE = re.compile(r"viewPlayer\(['\"](.+?)['\"]\)")
-# Matches hooprec's <div class="match-score">30 - 28</div>
+# Score element: <div class="match-score">30 - 28</div>
 _MATCH_SCORE_RE = re.compile(r'(\d+)\s*[-–]\s*(\d+)')
 
 

@@ -1,4 +1,4 @@
-# HoopRec RAG Ingestion — Python dependencies
+# Basketball RAG Ingestion — Python dependencies
 # Install with: pip install -r requirements.txt
 # Then run:     playwright install chromium
 

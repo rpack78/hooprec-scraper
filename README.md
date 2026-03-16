@@ -1,6 +1,6 @@
-# HoopRec Scraper
+# 1v1 Basketball RAG Scraper
 
-A production-ready web scraping and data ingestion pipeline for [hooprec.com](https://hooprec.com). Extracts player profiles, match results, scores, and YouTube video links into a structured SQLite database and Markdown files — designed to power a RAG (Retrieval-Augmented Generation) knowledge base.
+A production-ready web scraping and data ingestion pipeline for a 1v1 basketball stats site. Extracts player profiles, match results, scores, and YouTube video links into a structured SQLite database and Markdown files — designed to power a RAG (Retrieval-Augmented Generation) knowledge base.
 
 ## Features
 
@@ -85,7 +85,7 @@ for r in results:
 
 ## Tuning
 
-After the first run, inspect the saved Markdown files in `data/hooprec_md/` and compare against the live HTML. You may need to adjust the CSS selectors in `scrape_players_directory()` and `_parse_match_detail()` to match hooprec.com's actual class names and score layout.
+After the first run, inspect the saved Markdown files in `data/hooprec_md/` and compare against the live HTML. You may need to adjust the CSS selectors in `scrape_players_directory()` and `_parse_match_detail()` to match the site's actual class names and score layout.
 
 ## License
 
