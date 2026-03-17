@@ -14,6 +14,10 @@ $IngestScript = "$ScriptDir\hooprec_master_ingest.py"
 $LogFile      = "$ScriptDir\run_ingest.log"
 >>>>>>> f2793fc (feat: Added schedule to run nightly)
 
+# Force UTF-8 output so crawl4ai's Unicode progress chars don't crash on
+# Windows cp1252 encoding when writing to a log file.
+$env:PYTHONUTF8 = '1'
+
 $timestamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
 Add-Content $LogFile "[$timestamp] Starting ingestion..."
 

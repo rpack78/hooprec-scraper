@@ -40,6 +40,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import urljoin, urlparse, parse_qs
 
+import requests
+import warnings
+
 import aiofiles
 from crawl4ai import AsyncWebCrawler, BrowserConfig, CrawlerRunConfig, CacheMode
 
@@ -161,61 +164,81 @@ def save_matches_json(records: list[dict]) -> None:
 # Step 1 - Players directory
 # ---------------------------------------------------------------------------
 
+_PLAYERS_API_URL = (
+    "https://v1-basketball-api-1053404524627.us-central1.run.app/api/players"
+)
+_PLAYERS_API_HEADERS = {"Origin": BASE_URL, "Referer": f"{BASE_URL}/"}
+
+
 async def scrape_players_directory(
-    crawler: AsyncWebCrawler,
+    crawler: AsyncWebCrawler,  # kept for call-site compatibility; not used
     conn: sqlite3.Connection,
 ) -> list[dict]:
-    """Scrape the players directory. Returns list of {name, profile_url}."""
-    log.info("Scraping players directory ...")
+    """Fetch all players via the site's REST API (no browser required).
 
-    # [AGENT: if the actual CSS class for the loading spinner or player cards
-    #  differs from what you see at runtime, update these selector strings.]
-    wait_condition = (
-        "() => !document.querySelector('.loading-indicator') && "
-        "document.querySelectorAll('.player-card, .player-item, [data-player]').length > 0"
-    )
+    The API endpoint supports a limit parameter; limit=500 returns all ~204
+    active players in one request.
+    """
+    log.info("Fetching players from API ...")
 
-    result = await crawler.arun(url=PLAYERS_DIR_URL, config=run_cfg(wait_for=wait_condition))
-
-    if not result.success:
-        log.error("Failed to fetch players directory: %s", result.error_message)
+    try:
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            resp = requests.get(
+                _PLAYERS_API_URL,
+                params={"limit": 500},
+                headers=_PLAYERS_API_HEADERS,
+                timeout=30,
+            )
+    except requests.RequestException as exc:
+        log.error("Players API request failed: %s", exc)
         return []
 
-    md_path = await save_markdown("players_directory", result.markdown or "")
+    if resp.status_code != 200:
+        log.error("Players API returned HTTP %d", resp.status_code)
+        return []
 
-    players: list[dict] = []
-    seen: set[str] = set()
+    api_data = resp.json()
+    if not isinstance(api_data, list) or not api_data:
+        log.error("Unexpected players API response: %s", type(api_data))
+        return []
 
-    for link in result.links.get("internal", []):
-        href = link.get("href", "")
-        text = link.get("text", "").strip()
-        if (
-            href
-            and ("player" in href.lower() or "profile" in href.lower())
-            and text
-            and href not in seen
-        ):
-            seen.add(href)
-            full_url = href if href.startswith("http") else urljoin(BASE_URL, href)
-            players.append({"name": text, "profile_url": full_url})
+    log.info("Players API: %d players received", len(api_data))
 
-    log.info("Found %d player links", len(players))
+    # Build a simple markdown summary and save it
+    md_lines = ["# Players Directory\n"]
+    for p in api_data:
+        md_lines.append(
+            f"## {p['name']}\n\n"
+            f"- Wins: {p.get('wins', 0)}  "
+            f"Losses: {p.get('losses', 0)}  "
+            f"Total: {p.get('totalGames', 0)}\n"
+            f"- Rating: {p.get('rating', '')}  "
+            f"Location: {p.get('location', '')}\n"
+        )
+    md_path = await save_markdown("players_directory", "\n".join(md_lines))
 
     now = datetime.now(timezone.utc).isoformat()
-    for p in players:
+    players_out: list[dict] = []
+    for p in api_data:
+        name = p["name"]
+        profile_url = f"{BASE_URL}/player_profile.html?player={p['id']}"
         conn.execute(
             """
             INSERT INTO players (name, profile_url, scraped_at, raw_md_path)
             VALUES (:name, :profile_url, :ts, :md)
             ON CONFLICT(name) DO UPDATE SET
                 profile_url = excluded.profile_url,
-                scraped_at  = excluded.scraped_at
+                scraped_at  = excluded.scraped_at,
+                raw_md_path = excluded.raw_md_path
             """,
-            {"name": p["name"], "profile_url": p["profile_url"], "ts": now, "md": str(md_path)},
+            {"name": name, "profile_url": profile_url, "ts": now, "md": str(md_path)},
         )
+        players_out.append({"name": name, "profile_url": profile_url})
     conn.commit()
+
     set_progress(conn, "players_directory", now)
-    return players
+    return players_out
 
 
 # ---------------------------------------------------------------------------
@@ -293,10 +316,14 @@ def _extract_youtube(text: str) -> tuple[str | None, str | None]:
     return None, None
 
 
-# Player name pattern: onclick="viewPlayer('Name')"
+# Player name pattern on match detail pages: onclick="viewPlayer('Name')"
 _VIEW_PLAYER_RE = re.compile(r"viewPlayer\(['\"](.+?)['\"]\)")
+# Player card pattern on players directory: onclick="viewPlayer(123, 'Name')"
+_VP_DIR_RE = re.compile(r"viewPlayer\((\d+),\s*['\"](.+?)['\"]\)")
 # Score element: <div class="match-score">30 - 28</div>
 _MATCH_SCORE_RE = re.compile(r'(\d+)\s*[-–]\s*(\d+)')
+# Date element: <div class="info-value">2/15/2026</div>
+_DATE_RE = re.compile(r'\d{1,2}/\d{1,2}/\d{4}')
 
 
 def _parse_match_detail(result, match_id: str, detail_url: str) -> dict:
@@ -353,6 +380,14 @@ def _parse_match_detail(result, match_id: str, detail_url: str) -> dict:
         elif p2_score > p1_score:
             winner, loser = p2, p1
 
+    # --- Date: <div class="info-value">2/15/2026</div> ---
+    match_date = None
+    for tag in soup.find_all(class_="info-value"):
+        text = tag.get_text(strip=True)
+        if _DATE_RE.fullmatch(text):
+            match_date = text
+            break
+
     return {
         "match_id":         match_id,
         "detail_url":       detail_url,
@@ -364,7 +399,7 @@ def _parse_match_detail(result, match_id: str, detail_url: str) -> dict:
         "loser_name":       loser,
         "youtube_url":      youtube_url,
         "youtube_video_id": youtube_vid,
-        "match_date":       None,
+        "match_date":       match_date,
         "scraped_at":       datetime.now(timezone.utc).isoformat(),
     }
 
@@ -396,6 +431,7 @@ def _upsert_match(conn: sqlite3.Connection, rec: dict) -> int:
             loser_name       = excluded.loser_name,
             youtube_url      = excluded.youtube_url,
             youtube_video_id = excluded.youtube_video_id,
+            match_date       = excluded.match_date,
             scraped_at       = excluded.scraped_at,
             raw_md_path      = excluded.raw_md_path
         """,
@@ -579,6 +615,17 @@ async def main() -> None:
 
     async with AsyncWebCrawler(config=BROWSER_CFG) as crawler:
         # Step 1: Players
+        # Detect stale data from old broken scraper (which captured the nav
+        # link "Players" instead of actual player cards).
+        bad_row = conn.execute(
+            "SELECT 1 FROM players WHERE name = 'Players'"
+        ).fetchone()
+        if bad_row:
+            log.info("Detected stale player data from old scraper — cleaning up.")
+            conn.execute("DELETE FROM players WHERE name = 'Players'")
+            conn.execute("DELETE FROM scrape_progress WHERE key = 'players_directory'")
+            conn.commit()
+
         if get_progress(conn, "players_directory"):
             log.info("Players directory already scraped. Skipping.")
         else:

@@ -4,6 +4,8 @@
 
 # Generated scrape artifacts (reproducible by re-running the script)
 hooprec-ingest/players.db
+hooprec-ingest/players.db-shm
+hooprec-ingest/players.db-wal
 hooprec-ingest/matches.json
 hooprec-ingest/data/hooprec_md/
 !hooprec-ingest/data/hooprec_md/.gitkeep
