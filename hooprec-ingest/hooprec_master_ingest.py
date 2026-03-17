@@ -192,15 +192,33 @@ async def scrape_players_directory(
             )
     except requests.RequestException as exc:
         log.error("Players API request failed: %s", exc)
+        log.error("Existing player data is untouched — skipping player refresh.")
+        return []
+
+    if resp.status_code in (401, 403):
+        log.error("Players API returned HTTP %d — access denied.", resp.status_code)
+        log.error(
+            "Well... the day we've been dreading finally came. "
+            "They locked us out. It was a fun ride while it lasted."
+        )
+        log.error("Existing player data is safe — nothing was modified.")
         return []
 
     if resp.status_code != 200:
         log.error("Players API returned HTTP %d", resp.status_code)
+        log.error("Existing player data is untouched — skipping player refresh.")
         return []
 
-    api_data = resp.json()
+    try:
+        api_data = resp.json()
+    except (ValueError, requests.exceptions.JSONDecodeError):
+        log.error("Players API returned non-JSON response — possible lockdown or CDN change.")
+        log.error("Existing player data is untouched — skipping player refresh.")
+        return []
+
     if not isinstance(api_data, list) or not api_data:
         log.error("Unexpected players API response: %s", type(api_data))
+        log.error("Existing player data is untouched — skipping player refresh.")
         return []
 
     log.info("Players API: %d players received", len(api_data))
