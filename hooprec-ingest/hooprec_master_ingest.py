@@ -21,9 +21,9 @@ Usage
     python hooprec_master_ingest.py
 
 Environment / config overrides (optional .env or env vars):
-    HOOPREC_DB      path to SQLite file   (default: players.db)
-    HOOPREC_MD_DIR  Markdown output dir   (default: data/hooprec_md)
-    HOOPREC_JSON    matches JSON path      (default: matches.json)
+    HOOPREC_DB      path to SQLite file   (default: data/db/hooprec.sqlite)
+    HOOPREC_MD_DIR  Markdown output dir   (default: data/raw/hooprec_md)
+    HOOPREC_JSON    matches JSON path      (default: data/raw/matches.json)
     HOOPREC_DELAY   JS settle delay secs  (default: 2.5)
     HOOPREC_CONCUR  concurrent detail fetches (default: 3)
 """
@@ -53,11 +53,12 @@ BASE_URL        = "https://hooprec.com"
 PLAYERS_DIR_URL = f"{BASE_URL}/players_directory.html"
 MATCHES_DIR_URL = f"{BASE_URL}/matches_directory.html"
 
-_SCRIPT_DIR = Path(__file__).parent
+_SCRIPT_DIR  = Path(__file__).parent
+_PROJECT_ROOT = _SCRIPT_DIR.parent
 
-DB_PATH     = Path(os.getenv("HOOPREC_DB",     str(_SCRIPT_DIR / "players.db")))
-MD_DIR      = Path(os.getenv("HOOPREC_MD_DIR", str(_SCRIPT_DIR / "data" / "hooprec_md")))
-JSON_PATH   = Path(os.getenv("HOOPREC_JSON",   str(_SCRIPT_DIR / "matches.json")))
+DB_PATH     = Path(os.getenv("HOOPREC_DB",     str(_PROJECT_ROOT / "data" / "db" / "hooprec.sqlite")))
+MD_DIR      = Path(os.getenv("HOOPREC_MD_DIR", str(_PROJECT_ROOT / "data" / "raw" / "hooprec_md")))
+JSON_PATH   = Path(os.getenv("HOOPREC_JSON",   str(_PROJECT_ROOT / "data" / "raw" / "matches.json")))
 JS_DELAY    = float(os.getenv("HOOPREC_DELAY", "2.5"))
 CONCURRENCY = int(os.getenv("HOOPREC_CONCUR",  "3"))
 

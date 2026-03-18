@@ -8,7 +8,7 @@ rows = conn.execute("""
     FROM players p
     LEFT JOIN player_matches pm ON pm.player_id = p.id
     LEFT JOIN matches m ON m.id = pm.match_id
-    WHERE p.wins + p.losses > 0
+    WHERE p.wins + p.losses > 0 AND p.losses > 0
     GROUP BY p.id
     ORDER BY win_pct DESC, wins DESC, last_game DESC
     LIMIT 50

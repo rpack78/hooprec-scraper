@@ -3,6 +3,7 @@
 # =============================================================
 
 # Generated scrape artifacts (reproducible by re-running the script)
+# Phase 1 legacy paths (keep until fully migrated)
 hooprec-ingest/players.db
 hooprec-ingest/players.db-shm
 hooprec-ingest/players.db-wal
@@ -10,6 +11,15 @@ hooprec-ingest/matches.json
 hooprec-ingest/data/hooprec_md/
 !hooprec-ingest/data/hooprec_md/.gitkeep
 hooprec-ingest/run_ingest.log
+
+# Shared data directory (new canonical locations)
+data/db/
+!data/db/.gitkeep
+data/raw/hooprec_md/
+!data/raw/hooprec_md/.gitkeep
+data/raw/youtube_md/
+!data/raw/youtube_md/.gitkeep
+data/raw/matches.json
 
 # Python virtual environments
 .venv/
@@ -37,3 +47,9 @@ Thumbs.db
 
 # VS Code
 .vscode/
+
+# GitHub Copilot prompt files
+.github/prompts/
+
+# Scratch / local output files
+results.txt

@@ -98,14 +98,23 @@ Everything is resumeable — if the script crashes mid-run, re-running it skips 
 ### Project structure
 
 ```
-hooprec-ingest/
-├── hooprec_master_ingest.py   # Main ingestion script
-├── schema.sql                 # SQLite DDL (players, matches, player_matches, scrape_progress)
-├── requirements.txt           # Python dependencies
-├── run_ingest.ps1             # Task Scheduler wrapper (daily runs)
-├── schedule_task.ps1          # One-time: registers the scheduled task
-└── data/
-    └── hooprec_md/            # Markdown dump of every scraped page (for vector indexing)
+hooprec-scraper/
+├── data/                          # Persistent project data (gitignored)
+│   ├── db/
+│   │   └── hooprec.sqlite         # Shared SQLite database
+│   └── raw/
+│       ├── hooprec_md/            # Phase 1 Markdown (match pages, players)
+│       ├── youtube_md/            # Phase 2 Markdown (transcripts, comments)
+│       └── matches.json           # Matches JSON export
+├── hooprec-ingest/                # Phase 1 — HoopRec scraper
+│   ├── hooprec_master_ingest.py   # Main ingestion script
+│   ├── schema.sql                 # SQLite DDL
+│   ├── requirements.txt           # Python dependencies
+│   ├── run_ingest.ps1             # Task Scheduler wrapper (daily runs)
+│   └── schedule_task.ps1          # One-time: registers the scheduled task
+├── youtube-ingest/                # Phase 2 — YouTube data collection
+├── rag/                           # Phase 3 — RAG chat interface (future)
+└── README.md
 ```
 
 ### Running it
@@ -121,9 +130,9 @@ python hooprec_master_ingest.py
 
 | Variable | Default | Description |
 |---|---|---|
-| `HOOPREC_DB` | `players.db` | Path to the SQLite database |
-| `HOOPREC_MD_DIR` | `data/hooprec_md` | Markdown output directory |
-| `HOOPREC_JSON` | `matches.json` | Matches JSON export path |
+| `HOOPREC_DB` | `data/db/hooprec.sqlite` | Path to the SQLite database |
+| `HOOPREC_MD_DIR` | `data/raw/hooprec_md` | Markdown output directory |
+| `HOOPREC_JSON` | `data/raw/matches.json` | Matches JSON export path |
 | `HOOPREC_DELAY` | `2.5` | Seconds to wait for JS rendering |
 | `HOOPREC_CONCUR` | `3` | Max concurrent match-detail fetches |
 
@@ -220,7 +229,7 @@ With match data *and* YouTube content in the database, Phase 3 wires it all into
 from hooprec_master_ingest import query_common_opponents
 import sqlite3
 
-conn = sqlite3.connect("players.db")
+conn = sqlite3.connect("data/db/hooprec.sqlite")
 results = query_common_opponents(conn, "Qel", "Skoob")
 for r in results:
     print(f"{r['opponent']}  Qel YT: {r['player_a_youtube']}  Skoob YT: {r['player_b_youtube']}")
