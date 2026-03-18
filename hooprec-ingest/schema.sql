@@ -51,3 +51,51 @@ CREATE INDEX IF NOT EXISTS idx_matches_winner ON matches(winner_name);
 CREATE INDEX IF NOT EXISTS idx_matches_loser  ON matches(loser_name);
 CREATE INDEX IF NOT EXISTS idx_pm_player      ON player_matches(player_id);
 CREATE INDEX IF NOT EXISTS idx_pm_match       ON player_matches(match_id);
+
+-- =============================================================
+-- Phase 2: YouTube Data Tables
+-- =============================================================
+
+-- Video metadata linked to a match
+CREATE TABLE IF NOT EXISTS youtube_videos (
+    id             INTEGER PRIMARY KEY AUTOINCREMENT,
+    match_id       INTEGER REFERENCES matches(id),
+    video_id       TEXT    NOT NULL UNIQUE,
+    title          TEXT,
+    description    TEXT,
+    channel_name   TEXT,
+    view_count     INTEGER,
+    like_count     INTEGER,
+    comment_count  INTEGER,
+    duration_sec   INTEGER,
+    published_at   TEXT,
+    scraped_at     TEXT
+);
+
+-- Transcripts: raw + Ollama-cleaned text, plus timestamped segments
+CREATE TABLE IF NOT EXISTS youtube_transcripts (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    video_id     TEXT    NOT NULL UNIQUE REFERENCES youtube_videos(video_id),
+    language     TEXT    DEFAULT 'en',
+    raw_text     TEXT,
+    cleaned_text TEXT,
+    segments     TEXT,       -- JSON array of {start, duration, text}
+    scraped_at   TEXT
+);
+
+-- Top-level comments (replies excluded)
+CREATE TABLE IF NOT EXISTS youtube_comments (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    video_id     TEXT    NOT NULL REFERENCES youtube_videos(video_id),
+    comment_id   TEXT    NOT NULL UNIQUE,
+    author       TEXT,
+    text         TEXT,
+    like_count   INTEGER,
+    published_at TEXT,
+    scraped_at   TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_yt_videos_match   ON youtube_videos(match_id);
+CREATE INDEX IF NOT EXISTS idx_yt_videos_vid     ON youtube_videos(video_id);
+CREATE INDEX IF NOT EXISTS idx_yt_transcripts_vid ON youtube_transcripts(video_id);
+CREATE INDEX IF NOT EXISTS idx_yt_comments_vid   ON youtube_comments(video_id);
