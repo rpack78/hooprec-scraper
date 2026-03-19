@@ -171,8 +171,9 @@ def fetch_top_comments(service, video_id: str, max_results: int = 20) -> list[di
             textFormat="plainText",
         ).execute()
     except Exception as exc:
-        if "commentsDisabled" in str(exc) or "403" in str(exc):
-            log.info("  Comments disabled for %s", video_id)
+        exc_str = str(exc)
+        if "commentsDisabled" in exc_str or "403" in exc_str or "404" in exc_str or "videoNotFound" in exc_str:
+            log.info("  Comments unavailable for %s: %s", video_id, type(exc).__name__)
             return []
         raise
     comments = []
