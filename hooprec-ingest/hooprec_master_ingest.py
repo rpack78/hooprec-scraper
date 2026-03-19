@@ -404,7 +404,9 @@ def _parse_match_detail(result, match_id: str, detail_url: str) -> dict:
     for tag in soup.find_all(class_="info-value"):
         text = tag.get_text(strip=True)
         if _DATE_RE.fullmatch(text):
-            match_date = text
+            # Convert M/D/YYYY → YYYY-MM-DD for sortable storage
+            parts = text.split("/")
+            match_date = f"{parts[2]}-{int(parts[0]):02d}-{int(parts[1]):02d}"
             break
 
     return {
