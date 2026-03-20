@@ -20,6 +20,7 @@ data/raw/hooprec_md/
 data/raw/youtube_md/
 !data/raw/youtube_md/.gitkeep
 data/raw/matches.json
+data/youtube_ingest.log
 
 # Python virtual environments
 .venv/
