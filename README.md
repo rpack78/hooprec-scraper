@@ -23,11 +23,13 @@ flowchart TB
         API --> CRAWL
     end
 
-    subgraph phase2["📺 Phase 2 — YouTube Data · NEXT"]
+    subgraph phase2["📺 Phase 2 — YouTube Data · DONE"]
         direction TB
         YT["🎬 YouTube Data API v3"]
         YTDL["📝 Transcript extraction"]
+        OLLAMA_P2["🧹 Ollama llama3.1:8b<br/><i>Punctuation agent</i>"]
         YT --> YTDL
+        YTDL --> OLLAMA_P2
     end
 
     subgraph storage["💾 Data Layer"]
@@ -37,12 +39,12 @@ flowchart TB
         JSON["📋 matches.json<br/>export"]
     end
 
-    subgraph phase3["💬 Phase 3 — Chat Interface · FUTURE"]
+    subgraph phase3["💬 Phase 3 — Chat Interface · NEXT"]
         direction TB
-        VEC["🔍 Vector Store<br/><i>semantic search</i>"]
-        LLM["🤖 LLM<br/><i>GPT-4 / Claude</i>"]
-        RAG["⚙️ RAG Orchestrator"]
-        CHAT["💬 Chat UI"]
+        VEC["🔍 ChromaDB<br/><i>vector store</i>"]
+        LLM["🤖 Ollama llama3.1:8b<br/><i>local LLM</i>"]
+        RAG["⚙️ LlamaIndex<br/><i>hybrid retrieval</i>"]
+        CHAT["💬 CLI → Web UI"]
         VEC --> RAG
         LLM --> RAG
         RAG --> CHAT
@@ -51,16 +53,16 @@ flowchart TB
     CRAWL --> DB
     CRAWL --> MD
     CRAWL --> JSON
-    YTDL --> DB
-    YTDL --> MD
+    OLLAMA_P2 --> DB
+    OLLAMA_P2 --> MD
     DB --> VEC
     MD --> VEC
     DB --> RAG
 
     style phase1 fill:#fff5ee,stroke:#ff6b35,stroke-width:3px,color:#cc5500
-    style phase2 fill:#e8faf8,stroke:#1b998b,stroke-width:3px,color:#147a6e
+    style phase2 fill:#fff5ee,stroke:#ff6b35,stroke-width:3px,color:#cc5500
     style storage fill:#f8f9fa,stroke:#6c757d,stroke-width:2px,color:#333
-    style phase3 fill:#eeeaff,stroke:#6c63ff,stroke-width:3px,color:#4a44b3
+    style phase3 fill:#e8faf8,stroke:#1b998b,stroke-width:3px,color:#147a6e
 ```
 
 ---
@@ -71,7 +73,7 @@ flowchart TB
 |---|---|---|
 | [hooprec.com](https://hooprec.com) match pages | Players, scores, winners, dates, game-film YouTube links | crawl4ai (Playwright) parses JS-rendered `onclick` handlers |
 | [hooprec.com REST API](https://hooprec.com/players_directory.html) | Full player directory (204 active players with ratings, records, locations) | Direct HTTP `GET /api/players?limit=500` |
-| YouTube *(Phase 2)* | Video metadata, transcripts, descriptions, top comments | YouTube Data API v3 + transcript extraction |
+| YouTube | Video metadata, transcripts, descriptions, top comments | YouTube Data API v3 + `youtube-transcript-api` + Ollama punctuation agent |
 
 ---
 
@@ -94,6 +96,9 @@ Everything is resumeable — if the script crashes mid-run, re-running it skips 
 | `players` | 359 | 204 from API + 155 discovered through matches |
 | `matches` | 627 | 598 with YouTube links, all with dates |
 | `player_matches` | 1,254 | Win/loss/score per player per match |
+| `youtube_videos` | 572 | Video metadata (title, views, likes, duration, channel) |
+| `youtube_transcripts` | 572 | Raw + Ollama-cleaned transcripts with timestamped segments |
+| `youtube_comments` | 11,038 | Top comments per video (up to 20 each, sorted by relevance) |
 
 ### Project structure
 
@@ -113,7 +118,9 @@ hooprec-scraper/
 │   ├── run_ingest.ps1             # Task Scheduler wrapper (daily runs)
 │   └── schedule_task.ps1          # One-time: registers the scheduled task
 ├── youtube-ingest/                # Phase 2 — YouTube data collection
-├── rag/                           # Phase 3 — RAG chat interface (future)
+│   ├── youtube_ingest.py          # Main YouTube ingestion script
+│   └── requirements.txt           # Python dependencies
+├── rag/                           # Phase 3 — RAG chat interface (next)
 └── README.md
 ```
 
@@ -138,13 +145,19 @@ python hooprec_master_ingest.py
 
 ---
 
-## Phase 2 — YouTube Data Collection 🔜
+## Phase 2 — YouTube Data Collection ✅
 
-Every match on HoopRec links to a YouTube video (598 of 627 matches have a URL). Phase 2 enriches the database with the content *inside* those videos:
+**Status: Complete.** 572 of 598 YouTube-linked matches enriched with video metadata, transcripts, and comments.
 
-- **Video metadata** — Title, description, view count, like count, publish date, channel name, duration.
-- **Transcripts** — Auto-generated or manual captions extracted via `youtube-transcript-api`. These capture commentary, player callouts, and play-by-play narration.
-- **Top comments** — The most-liked comments often surface crowd favorites, controversial moments, and memorable plays.
+The YouTube ingestion script (`youtube_ingest.py`) enriches the database with the content *inside* match videos:
+
+1. **Video metadata** — Fetches title, description, view count, like count, publish date, channel name, and duration via YouTube Data API v3 (batched, up to 50 IDs per call).
+2. **Transcripts** — Extracts auto-generated captions via `youtube-transcript-api`. Raw caption text and timestamped segments are stored separately.
+3. **Punctuation agent** — A local Ollama instance (llama3.1:8b on RTX 4070 Super) post-processes raw transcripts to add punctuation, capitalization, paragraph breaks, and speaker identification. Long transcripts are chunked into 2,000-word overlapping segments for processing.
+4. **Top comments** — Fetches up to 20 top-level comments per video sorted by relevance.
+5. **Markdown output** — Generates one file per video in `data/raw/youtube_md/` containing match metadata, video stats, cleaned transcript, and top comments — ready for Phase 3 vector embedding.
+
+Everything is resumable — checkpoints each video in `scrape_progress`. Raw and cleaned transcripts are stored separately so the punctuation agent can be re-run with a better model/prompt without re-fetching from YouTube.
 
 ### Why this matters
 
@@ -154,74 +167,62 @@ Match stats alone (scores, winner/loser) can't answer questions about *what happ
 - *"What's a controversial call in a Left Hand Dom game?"*
 - *"Which games do fans consider the best of all time?"*
 
-### Planned schema additions
+### Running it
 
-```sql
-CREATE TABLE youtube_videos (
-    id             INTEGER PRIMARY KEY AUTOINCREMENT,
-    match_id       INTEGER REFERENCES matches(id),
-    video_id       TEXT NOT NULL UNIQUE,
-    title          TEXT,
-    description    TEXT,
-    channel_name   TEXT,
-    view_count     INTEGER,
-    like_count     INTEGER,
-    comment_count  INTEGER,
-    duration_sec   INTEGER,
-    published_at   TEXT,
-    scraped_at     TEXT
-);
-
-CREATE TABLE youtube_transcripts (
-    id          INTEGER PRIMARY KEY AUTOINCREMENT,
-    video_id    TEXT NOT NULL REFERENCES youtube_videos(video_id),
-    language    TEXT DEFAULT 'en',
-    text        TEXT,       -- full transcript as one block
-    segments    TEXT,       -- JSON array of {start, duration, text}
-    scraped_at  TEXT
-);
-
-CREATE TABLE youtube_comments (
-    id              INTEGER PRIMARY KEY AUTOINCREMENT,
-    video_id        TEXT NOT NULL REFERENCES youtube_videos(video_id),
-    comment_id      TEXT NOT NULL UNIQUE,
-    author          TEXT,
-    text            TEXT,
-    like_count      INTEGER,
-    published_at    TEXT,
-    is_top_level    INTEGER DEFAULT 1
-);
+```bash
+cd youtube-ingest
+pip install -r requirements.txt
+python youtube_ingest.py                    # process all matches
+python youtube_ingest.py --limit 50         # first 50 only
+python youtube_ingest.py --video-id ABC123  # single video
+python youtube_ingest.py --skip-ollama      # skip punctuation pass
+python youtube_ingest.py --refresh          # re-fetch metadata + comments only
+python youtube_ingest.py --dry-run          # preview, no writes
 ```
 
-### Approach
+### Configuration
 
-1. Walk every match row that has a `youtube_url`.
-2. Call the YouTube Data API v3 for video metadata + top comments.
-3. Call `youtube-transcript-api` for captions.
-4. Save transcript text as Markdown (one file per video) for vector indexing alongside the existing match Markdown.
-5. Checkpoint each video in `scrape_progress` for resumeability, same pattern as Phase 1.
+| Variable | Default | Description |
+|---|---|---|
+| `YOUTUBE_API_KEY` | *(required)* | YouTube Data API v3 key (stored in `.env`) |
+| `HOOPREC_DB` | `data/db/hooprec.sqlite` | Path to the SQLite database |
+| `YOUTUBE_MD_DIR` | `data/raw/youtube_md` | Markdown output directory |
+| `OLLAMA_MODEL` | `llama3.1:8b` | Ollama model for transcript cleaning |
+| `OLLAMA_TIMEOUT` | `120` | Seconds before Ollama timeout |
 
 ---
 
-## Phase 3 — RAG Chat Interface 🔮
+## Phase 3 — RAG Chat Interface 🔜
 
-With match data *and* YouTube content in the database, Phase 3 wires it all into a conversational interface:
+With match data *and* YouTube content in the database, Phase 3 wires it all into a conversational interface. Fully local — no cloud APIs required.
+
+### Stack
+
+| Component | Choice | Why |
+|---|---|---|
+| **RAG framework** | LlamaIndex | Purpose-built for RAG, first-class hybrid retrieval, good learning investment |
+| **Vector store** | ChromaDB | Persistent, metadata filtering, zero infrastructure |
+| **LLM** | Ollama (llama3.1:8b) | Already running from Phase 2, free, private |
+| **Embeddings** | nomic-embed-text via Ollama | Local, no API key needed |
+| **Chat UI** | CLI first, web later | Fast iteration, add Streamlit/Gradio once the engine works |
 
 ### How it works
 
-1. **Embed** — Markdown files (match pages + transcripts + comments) are chunked and embedded into a vector store.
-2. **Retrieve** — User questions are embedded and matched against the vector store to find relevant chunks. Structured SQL queries (like `query_common_opponents()`) run in parallel for precise lookups.
-3. **Generate** — Retrieved context is passed to an LLM (GPT-4 / Claude) which synthesizes a grounded answer with citations and YouTube links.
+1. **Ingest** — YouTube Markdown files (transcripts + comments + metadata) are chunked and embedded into ChromaDB via LlamaIndex with nomic-embed-text.
+2. **Retrieve** — User questions are routed by a `RouterQueryEngine`:
+   - **Vector path** — Semantic search over transcripts and comments for narrative/opinion questions.
+   - **SQL path** — `NLSQLTableQueryEngine` over `hooprec.sqlite` + `query_common_opponents()` wrapped as a `FunctionTool` for stats and comparison queries.
+3. **Generate** — Retrieved context is passed to Ollama which synthesizes a grounded answer with citations and YouTube links.
 
 ### Example queries the system should handle
 
-| Question | Data needed |
-|---|---|
-| *"What's the most popular 1v1 involving Left Hand Dom?"* | `youtube_videos.view_count` + `matches` join |
-| *"Show me a game with a controversial incident"* | Transcript text search + comment sentiment |
-| *"Who has Qel beat that Skoob has lost to?"* | `query_common_opponents()` SQL helper (already built) |
-| *"What do fans think of Nasir Core?"* | Comment text across all his match videos |
-| *"Summarize Left Hand Dom vs Chris Lykes"* | Match stats + transcript + top comments |
+| Question | Data needed | Retrieval path |
+|---|---|---|
+| *"What's the most popular 1v1 involving Left Hand Dom?"* | `youtube_videos.view_count` + `matches` join | SQL |
+| *"Show me a game with a controversial incident"* | Transcript text search + comment sentiment | Vector |
+| *"Who has Qel beat that Skoob has lost to?"* | `query_common_opponents()` SQL helper (already built) | SQL (FunctionTool) |
+| *"What do fans think of Nasir Core?"* | Comment text across all his match videos | Vector |
+| *"Summarize Left Hand Dom vs Chris Lykes"* | Match stats + transcript + top comments | Hybrid (both) |
 
 ### The script already includes a RAG query helper
 
@@ -235,12 +236,17 @@ for r in results:
     print(f"{r['opponent']}  Qel YT: {r['player_a_youtube']}  Skoob YT: {r['player_b_youtube']}")
 ```
 
-### Planned components
+### Planned structure
 
-- **Vector store** — FAISS or Chroma over chunked Markdown (match pages, transcripts, comment threads).
-- **Orchestrator** — Routes questions to vector search, SQL lookups, or both, then merges context for the LLM.
-- **LLM** — GPT-4 or Claude for answer generation with tool/function calling support.
-- **Chat UI** — Lightweight web interface or CLI for interactive Q&A.
+```
+rag/
+├── __init__.py
+├── ingest.py          # Document loading, chunking, embedding → ChromaDB
+├── query_engine.py    # Vector + SQL engines, hybrid router
+├── cli.py             # Interactive CLI REPL
+├── config.py          # Paths, model names, chunk sizes (env-configurable)
+└── requirements.txt   # LlamaIndex + ChromaDB deps
+```
 
 ---
 
