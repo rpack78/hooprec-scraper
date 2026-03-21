@@ -49,8 +49,5 @@ Thumbs.db
 # VS Code
 .vscode/
 
-# GitHub Copilot prompt files
-.github/prompts/
-
 # Scratch / local output files
 results.txt
