@@ -216,13 +216,15 @@ def build_router_query_engine():
             name="stats_and_records_database",
             description=(
                 "Query the structured database of 1v1 basketball stats. "
-                "Use this for questions about win/loss records, scores, "
-                "most popular videos (by view count), player comparisons, "
-                "match dates, which players have played each other, and "
-                "any statistical or factual question. Tables: players "
-                "(name, wins, losses), matches (scores, winner, loser, "
-                "youtube_url, match_date), player_matches (result, score), "
-                "youtube_videos (view_count, like_count, title, channel)."
+                "Use this ONLY for purely factual/numerical questions: "
+                "win/loss records, exact scores, view counts, match dates, "
+                "which players have played each other, and counting stats. "
+                "Do NOT use this for subjective questions like 'who is the "
+                "best' or 'who is the greatest' — those need fan opinions "
+                "too. Tables: players (name, wins, losses), matches "
+                "(scores, winner, loser, youtube_url, match_date), "
+                "player_matches (result, score), youtube_videos "
+                "(view_count, like_count, title, channel)."
             ),
         ),
     )
@@ -251,11 +253,15 @@ def build_router_query_engine():
         metadata=ToolMetadata(
             name="hybrid_sub_question_engine",
             description=(
-                "Use this for complex questions that need BOTH stats/records "
-                "AND transcript/comment information. For example: summarizing "
-                "a specific match (needs stats + transcript), or finding the "
-                "most popular game with a controversial moment. Decomposes "
-                "complex queries into sub-questions hitting both engines."
+                "Use this for questions that are subjective or need BOTH "
+                "stats AND fan opinions/comments. Examples: 'who is the "
+                "best player', 'who is the GOAT', 'who is overrated', "
+                "'who had a fall-off', summarizing a specific match, "
+                "finding the most popular game with a controversial "
+                "moment. Any question where stats alone don't fully "
+                "answer it should use this. Decomposes complex queries "
+                "into sub-questions hitting both stats and transcript/"
+                "comment engines."
             ),
         ),
     )
