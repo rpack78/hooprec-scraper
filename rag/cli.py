@@ -152,7 +152,14 @@ def main() -> None:
             elif force_mode == "vector":
                 response = vector_engine.query(user_input)
             else:
-                response = chat_engine.chat(user_input)
+                try:
+                    response = chat_engine.chat(user_input)
+                except Exception as route_err:
+                    # Router often fails when the LLM returns malformed JSON.
+                    # Fall back to the vector engine so the user still gets an answer.
+                    log.warning("Router failed (%s), falling back to vector engine", route_err)
+                    print("  (auto-routing failed, falling back to vector search)")
+                    response = vector_engine.query(user_input)
 
             print(f"\nAssistant: {response}\n")
 
