@@ -286,6 +286,29 @@ python -m rag.cli
 | `RAG_LLM_TIMEOUT` | `120` | LLM request timeout (seconds) |
 | `CHROMA_DIR` | `data/db/chroma` | ChromaDB persistent storage path |
 
+### Switching LLM models
+
+The default `llama3.1:8b` works but struggles with JSON routing and SQL generation. Upgrading to a larger model improves quality — all models are free and run locally via Ollama.
+
+| Model | VRAM needed | Strengths | Notes |
+|---|---|---|---|
+| `llama3.1:8b` (default) | ~5 GB | Fast, good for transcripts | Weak at structured output (JSON, SQL) |
+| **`qwen2.5:14b` (recommended)** | **~9 GB** | **Better reasoning, reliable JSON/SQL** | **Fits a 12 GB GPU (e.g. RTX 4070 Super)** |
+| `gemma3:12b` | ~8 GB | Good instruction following | Also fits 12 GB |
+
+To switch, pull the model and update your `.env`:
+
+```bash
+ollama pull qwen2.5:14b
+```
+
+```env
+# .env
+RAG_LLM_MODEL=qwen2.5:14b
+```
+
+Then restart the CLI. No re-ingestion needed — only the LLM changes, the embedding model (`nomic-embed-text`) and ChromaDB stay the same. Switch back anytime by changing the value.
+
 ### Project structure
 
 ```
