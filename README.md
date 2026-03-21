@@ -106,7 +106,8 @@ Everything is resumeable — if the script crashes mid-run, re-running it skips 
 hooprec-scraper/
 ├── data/                          # Persistent project data (gitignored)
 │   ├── db/
-│   │   └── hooprec.sqlite         # Shared SQLite database
+│   │   ├── hooprec.sqlite         # Shared SQLite database
+│   │   └── chroma/                # ChromaDB vector store (Phase 3)
 │   └── raw/
 │       ├── hooprec_md/            # Phase 1 Markdown (match pages, players)
 │       ├── youtube_md/            # Phase 2 Markdown (transcripts, comments)
@@ -120,7 +121,13 @@ hooprec-scraper/
 ├── youtube-ingest/                # Phase 2 — YouTube data collection
 │   ├── youtube_ingest.py          # Main YouTube ingestion script
 │   └── requirements.txt           # Python dependencies
-├── rag/                           # Phase 3 — RAG chat interface (next)
+├── rag/                           # Phase 3 — RAG chat interface
+│   ├── __init__.py
+│   ├── ingest.py                  # Doc loading → ChromaDB
+│   ├── query_engine.py            # Vector + SQL + hybrid router
+│   ├── cli.py                     # Interactive CLI REPL
+│   ├── config.py                  # Centralized configuration
+│   └── requirements.txt           # LlamaIndex + ChromaDB deps
 └── README.md
 ```
 
@@ -192,56 +199,99 @@ python youtube_ingest.py --dry-run          # preview, no writes
 
 ---
 
-## Phase 3 — RAG Chat Interface 🔜
+## Phase 3 — RAG Chat Interface 🏗️
 
-With match data *and* YouTube content in the database, Phase 3 wires it all into a conversational interface. Fully local — no cloud APIs required.
+**Status: Active.** Hybrid RAG system using LlamaIndex + ChromaDB + Ollama. CLI-first, fully local.
 
 ### Stack
 
 | Component | Choice | Why |
 |---|---|---|
-| **RAG framework** | LlamaIndex | Purpose-built for RAG, first-class hybrid retrieval, good learning investment |
+| **RAG framework** | LlamaIndex 0.14 | Purpose-built for RAG, first-class hybrid retrieval, good learning investment |
 | **Vector store** | ChromaDB | Persistent, metadata filtering, zero infrastructure |
 | **LLM** | Ollama (llama3.1:8b) | Already running from Phase 2, free, private |
-| **Embeddings** | nomic-embed-text via Ollama | Local, no API key needed |
+| **Embeddings** | nomic-embed-text via Ollama | Local, 768-dim embeddings, no API key needed |
 | **Chat UI** | CLI first, web later | Fast iteration, add Streamlit/Gradio once the engine works |
 
 ### How it works
 
-1. **Ingest** — YouTube Markdown files (transcripts + comments + metadata) are chunked and embedded into ChromaDB via LlamaIndex with nomic-embed-text.
+1. **Ingest** — YouTube Markdown files (transcripts + comments + metadata) are chunked (512 tokens, 50 overlap) and embedded into ChromaDB via LlamaIndex with nomic-embed-text. Resumeable — re-runs skip already-processed files.
 2. **Retrieve** — User questions are routed by a `RouterQueryEngine`:
    - **Vector path** — Semantic search over transcripts and comments for narrative/opinion questions.
-   - **SQL path** — `NLSQLTableQueryEngine` over `hooprec.sqlite` + `query_common_opponents()` wrapped as a `FunctionTool` for stats and comparison queries.
+   - **SQL path** — `NLSQLTableQueryEngine` over `hooprec.sqlite` for stats/records queries.
+   - **Common opponents** — `query_common_opponents()` wrapped as a custom query engine for player-vs-player comparison queries.
+   - **Hybrid** — `SubQuestionQueryEngine` decomposes complex queries into sub-parts hitting both engines.
 3. **Generate** — Retrieved context is passed to Ollama which synthesizes a grounded answer with citations and YouTube links.
 
-### Example queries the system should handle
+### Current vector store
+
+| Metric | Value |
+|---|---|
+| ChromaDB collection | `hooprec_youtube` |
+| Total chunks | ~2,007 |
+| Source documents | 640 (51 transcripts + 589 comment sets from 598 files) |
+| Embedding dimension | 768 (nomic-embed-text) |
+| Persistent storage | `data/db/chroma/` |
+
+### Example queries
 
 | Question | Data needed | Retrieval path |
 |---|---|---|
 | *"What's the most popular 1v1 involving Left Hand Dom?"* | `youtube_videos.view_count` + `matches` join | SQL |
 | *"Show me a game with a controversial incident"* | Transcript text search + comment sentiment | Vector |
-| *"Who has Qel beat that Skoob has lost to?"* | `query_common_opponents()` SQL helper (already built) | SQL (FunctionTool) |
+| *"Who has Qel beat that Skoob has lost to?"* | `query_common_opponents()` SQL helper | Common opponents |
 | *"What do fans think of Nasir Core?"* | Comment text across all his match videos | Vector |
 | *"Summarize Left Hand Dom vs Chris Lykes"* | Match stats + transcript + top comments | Hybrid (both) |
 
-### The script already includes a RAG query helper
+### Running it
 
-```python
-from hooprec_master_ingest import query_common_opponents
-import sqlite3
+```bash
+# 1. Install dependencies
+cd rag
+pip install -r requirements.txt
 
-conn = sqlite3.connect("data/db/hooprec.sqlite")
-results = query_common_opponents(conn, "Qel", "Skoob")
-for r in results:
-    print(f"{r['opponent']}  Qel YT: {r['player_a_youtube']}  Skoob YT: {r['player_b_youtube']}")
+# 2. Ensure Ollama models are available
+ollama pull llama3.1:8b
+ollama pull nomic-embed-text
+
+# 3. Ingest YouTube markdown into ChromaDB (run once, re-run for new matches)
+python -m rag.ingest
+python -m rag.ingest --reset   # wipe and re-ingest everything
+
+# 4. Start the interactive CLI
+python -m rag.cli
 ```
 
-### Planned structure
+### CLI commands
+
+| Command | Description |
+|---|---|
+| `/quit` | Exit the REPL |
+| `/sources` | Toggle source citation display |
+| `/sql` | Force next queries through SQL engine |
+| `/vector` | Force next queries through vector engine |
+| `/auto` | Return to automatic routing (default) |
+| `/clear` | Clear conversation history |
+
+### Configuration
+
+| Variable | Default | Description |
+|---|---|---|
+| `RAG_LLM_MODEL` | `llama3.1:8b` | Ollama LLM model for synthesis |
+| `RAG_EMBED_MODEL` | `nomic-embed-text` | Ollama embedding model |
+| `RAG_CHUNK_SIZE` | `512` | Token chunk size for transcript splitting |
+| `RAG_CHUNK_OVERLAP` | `50` | Token overlap between chunks |
+| `RAG_TOP_K` | `5` | Number of chunks to retrieve |
+| `RAG_CONTEXT_WINDOW` | `8192` | LLM context window size |
+| `RAG_LLM_TIMEOUT` | `120` | LLM request timeout (seconds) |
+| `CHROMA_DIR` | `data/db/chroma` | ChromaDB persistent storage path |
+
+### Project structure
 
 ```
 rag/
 ├── __init__.py
-├── ingest.py          # Document loading, chunking, embedding → ChromaDB
+├── ingest.py          # Doc loading, chunking, embedding → ChromaDB
 ├── query_engine.py    # Vector + SQL engines, hybrid router
 ├── cli.py             # Interactive CLI REPL
 ├── config.py          # Paths, model names, chunk sizes (env-configurable)
