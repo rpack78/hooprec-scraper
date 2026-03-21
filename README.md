@@ -300,6 +300,55 @@ rag/
 
 ---
 
+## Quick Reference
+
+```bash
+# ── Phase 1: HoopRec Scraper ──
+cd hooprec-ingest
+pip install -r requirements.txt
+playwright install chromium
+python hooprec_master_ingest.py
+
+# ── Phase 2: YouTube Ingest ──
+cd youtube-ingest
+pip install -r requirements.txt
+python youtube_ingest.py                    # all matches
+python youtube_ingest.py --limit 50         # first 50
+python youtube_ingest.py --video-id ABC123  # single video
+python youtube_ingest.py --skip-ollama      # skip punctuation
+python youtube_ingest.py --refresh          # re-fetch metadata/comments
+python youtube_ingest.py --dry-run          # preview only
+
+# ── Phase 3: RAG Chat ──
+cd rag
+pip install -r requirements.txt
+ollama pull llama3.1:8b
+ollama pull nomic-embed-text
+
+cd ../
+python -m rag.ingest              # ingest new files into ChromaDB
+python -m rag.ingest --reset      # wipe & re-ingest everything
+python -m rag.cli                 # start the interactive REPL
+```
+
+**REPL example session:**
+```
+You: What's the most popular 1v1 involving Left Hand Dom?
+You: Show me a game with a controversial incident
+You: Who has Qel beat that Skoob has lost to?
+You: What do fans think of Nasir Core?
+You: Summarize Left Hand Dom vs Chris Lykes
+
+/sql        # force SQL path
+/vector     # force vector path
+/auto       # back to auto-routing
+/sources    # toggle source citations
+/clear      # clear conversation history
+/quit       # exit
+```
+
+---
+
 ## License
 
 Private — not for redistribution.
