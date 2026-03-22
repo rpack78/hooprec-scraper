@@ -17,6 +17,8 @@ import asyncio
 import json
 import logging
 import re
+import subprocess
+import sys
 import uuid
 from pathlib import Path
 
@@ -284,6 +286,92 @@ async def chat_mode(request: Request, mode: str):
     session = _get_session(request)
     session["mode"] = mode
     return {"status": "ok", "mode": mode}
+
+
+# ---------------------------------------------------------------------------
+# Data refresh pipeline
+# ---------------------------------------------------------------------------
+
+_refresh_running = False
+
+
+@app.post("/api/ingest/refresh")
+async def ingest_refresh():
+    """Run the full data refresh pipeline via SSE progress stream.
+
+    Steps:
+      1. Phase 1 — Scrape hooprec.com for new matches
+      2. Phase 2 — YouTube metadata + comments refresh
+      3. Phase 3 — Ingest new markdown into ChromaDB
+    """
+    global _refresh_running
+    if _refresh_running:
+        return Response(status_code=409, content="Refresh already in progress")
+
+    from rag.config import PROJECT_ROOT
+
+    python = sys.executable
+
+    async def _run_step(label: str, cmd: list[str], cwd: str | Path):
+        """Run a subprocess, yield SSE progress lines."""
+        yield f"event: progress\ndata: {json.dumps({'step': label, 'status': 'running'})}\n\n"
+        proc = await asyncio.create_subprocess_exec(
+            *cmd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.STDOUT,
+            cwd=str(cwd),
+        )
+        async for raw_line in proc.stdout:
+            line = raw_line.decode(errors="replace").rstrip()
+            if line:
+                yield f"event: log\ndata: {json.dumps({'step': label, 'line': line})}\n\n"
+        await proc.wait()
+        ok = proc.returncode == 0
+        yield f"event: progress\ndata: {json.dumps({'step': label, 'status': 'done' if ok else 'error', 'code': proc.returncode})}\n\n"
+        if not ok:
+            raise RuntimeError(f"{label} failed with exit code {proc.returncode}")
+
+    async def event_stream():
+        global _refresh_running
+        _refresh_running = True
+        try:
+            # Phase 1 — HoopRec scraper
+            async for msg in _run_step(
+                "Phase 1: Scrape hooprec.com",
+                [python, "hooprec_master_ingest.py"],
+                PROJECT_ROOT / "hooprec-ingest",
+            ):
+                yield msg
+
+            # Phase 2 — YouTube: fetch transcripts, comments, metadata for new videos
+            async for msg in _run_step(
+                "Phase 2: YouTube ingest",
+                [python, "youtube_ingest.py"],
+                PROJECT_ROOT / "youtube-ingest",
+            ):
+                yield msg
+
+            # Phase 3 — ChromaDB ingest (new files only)
+            async for msg in _run_step(
+                "Phase 3: ChromaDB ingest",
+                [python, "-m", "rag.ingest"],
+                PROJECT_ROOT,
+            ):
+                yield msg
+
+            yield f"event: done\ndata: {json.dumps({'status': 'ok'})}\n\n"
+
+        except Exception as exc:
+            log.exception("Refresh pipeline error")
+            yield f"event: error\ndata: {json.dumps({'error': str(exc)})}\n\n"
+        finally:
+            _refresh_running = False
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 # ---------------------------------------------------------------------------

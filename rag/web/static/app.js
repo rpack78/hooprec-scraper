@@ -274,3 +274,145 @@ function escapeAttr(str) {
     if (!str) return '';
     return str.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/'/g, '&#39;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
+
+// ---------------------------------------------------------------------------
+// Data refresh pipeline
+// ---------------------------------------------------------------------------
+
+let isRefreshing = false;
+
+const STEP_MAP = {
+    'Phase 1: Scrape hooprec.com': 'step-1',
+    'Phase 2: YouTube ingest':     'step-2',
+    'Phase 3: ChromaDB ingest':    'step-3',
+};
+
+function refreshData() {
+    if (isRefreshing) return;
+    isRefreshing = true;
+
+    // Update button state
+    const btn = document.getElementById('refresh-btn');
+    const icon = document.getElementById('refresh-icon');
+    const label = document.getElementById('refresh-label');
+    btn.disabled = true;
+    btn.classList.add('opacity-50', 'cursor-not-allowed');
+    icon.classList.add('animate-spin');
+    label.textContent = 'Refreshing…';
+
+    // Show panel & reset
+    const panel = document.getElementById('refresh-panel');
+    const logEl = document.getElementById('refresh-log');
+    const statusEl = document.getElementById('refresh-status');
+    panel.classList.remove('hidden');
+    logEl.innerHTML = '';
+    statusEl.textContent = 'Starting pipeline…';
+    statusEl.className = 'text-hoop-orange font-medium';
+    Object.values(STEP_MAP).forEach(id => {
+        const el = document.getElementById(id);
+        el.className = 'text-gray-500';
+        el.textContent = el.textContent.replace(/^[✅❌🔄⏳]\s*/, '⏳ ');
+    });
+
+    fetch('/api/ingest/refresh', { method: 'POST' })
+        .then(response => {
+            const reader = response.body.getReader();
+            const decoder = new TextDecoder();
+            let buffer = '';
+
+            function read() {
+                reader.read().then(({ done, value }) => {
+                    if (done) { finishRefresh(true); return; }
+                    buffer += decoder.decode(value, { stream: true });
+                    const lines = buffer.split('\n');
+                    buffer = lines.pop();
+
+                    let eventType = '';
+                    for (const line of lines) {
+                        if (line.startsWith('event: ')) {
+                            eventType = line.slice(7).trim();
+                        } else if (line.startsWith('data: ')) {
+                            handleRefreshEvent(eventType, line.slice(6), logEl, statusEl);
+                        }
+                    }
+                    read();
+                });
+            }
+            read();
+        })
+        .catch(err => {
+            statusEl.textContent = `Error: ${err.message}`;
+            statusEl.className = 'text-red-400 font-medium';
+            finishRefresh(false);
+        });
+}
+
+function handleRefreshEvent(eventType, data, logEl, statusEl) {
+    try {
+        const payload = JSON.parse(data);
+        switch (eventType) {
+            case 'progress': {
+                const stepId = STEP_MAP[payload.step];
+                const el = stepId ? document.getElementById(stepId) : null;
+                if (el) {
+                    if (payload.status === 'running') {
+                        el.className = 'text-hoop-orange';
+                        el.textContent = el.textContent.replace(/^[✅❌🔄⏳]\s*/, '🔄 ');
+                        statusEl.textContent = payload.step + '…';
+                    } else if (payload.status === 'done') {
+                        el.className = 'text-green-400';
+                        el.textContent = el.textContent.replace(/^[✅❌🔄⏳]\s*/, '✅ ');
+                    } else if (payload.status === 'error') {
+                        el.className = 'text-red-400';
+                        el.textContent = el.textContent.replace(/^[✅❌🔄⏳]\s*/, '❌ ');
+                    }
+                }
+                break;
+            }
+            case 'log': {
+                const line = document.createElement('div');
+                line.textContent = payload.line;
+                logEl.appendChild(line);
+                logEl.scrollTop = logEl.scrollHeight;
+                break;
+            }
+            case 'done':
+                statusEl.textContent = 'All steps complete ✓';
+                statusEl.className = 'text-green-400 font-medium';
+                finishRefresh(true);
+                break;
+            case 'error':
+                statusEl.textContent = `Pipeline error: ${payload.error}`;
+                statusEl.className = 'text-red-400 font-medium';
+                finishRefresh(false);
+                break;
+        }
+    } catch (e) { /* ignore parse errors */ }
+}
+
+function finishRefresh(success) {
+    isRefreshing = false;
+    const btn = document.getElementById('refresh-btn');
+    const icon = document.getElementById('refresh-icon');
+    const label = document.getElementById('refresh-label');
+    btn.disabled = false;
+    btn.classList.remove('opacity-50', 'cursor-not-allowed');
+    icon.classList.remove('animate-spin');
+    label.textContent = 'Refresh Data';
+
+    // If success, reload landing page game cards after a short delay
+    if (success) {
+        setTimeout(() => {
+            fetch('/api/games/latest?limit=12')
+                .then(r => r.text())
+                .then(html => {
+                    const grid = document.querySelector('#landing .grid');
+                    if (grid) grid.innerHTML = html;
+                });
+        }, 500);
+    }
+}
+
+function closeRefreshPanel() {
+    document.getElementById('refresh-panel').classList.add('hidden');
+}
