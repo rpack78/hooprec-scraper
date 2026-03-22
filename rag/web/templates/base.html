@@ -61,6 +61,18 @@
             0%   { background-position: 200% 0; }
             100% { background-position: -200% 0; }
         }
+
+        /* Chat message markdown styles */
+        .prose-chat p { margin-bottom: 0.5em; }
+        .prose-chat p:last-child { margin-bottom: 0; }
+        .prose-chat ul, .prose-chat ol { margin: 0.5em 0; padding-left: 1.5em; }
+        .prose-chat li { margin-bottom: 0.25em; }
+        .prose-chat ul li { list-style: disc; }
+        .prose-chat ol li { list-style: decimal; }
+        .prose-chat a { color: #F97316; text-decoration: underline; text-underline-offset: 2px; }
+        .prose-chat a:hover { color: #F59E0B; }
+        .prose-chat strong { color: #F1F5F9; font-weight: 600; }
+        .prose-chat .system-note { color: #94A3B8; font-style: italic; font-size: 0.75rem; display: block; margin-bottom: 0.5em; }
     </style>
 </head>
 <body class="h-full bg-hoop-darker text-gray-100 antialiased">

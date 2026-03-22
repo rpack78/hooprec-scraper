@@ -57,23 +57,31 @@ templates = Jinja2Templates(directory=TEMPLATES_DIR)
 # ---------------------------------------------------------------------------
 
 _engines_ready = False
-_router_engine = None
+_vector_index = None     # kept so we can create filtered retrievers on demand
 _vector_engine = None
 _sql_engine = None
+_player_names: list[str] = []   # sorted longest-first for greedy matching
 
-# session_id -> {"chat_engine": ..., "mode": "auto"|"sql"|"vector"}
+# session_id -> {"mode": "auto"|"sql"|"vector"}
 _sessions: dict[str, dict] = {}
+
+# Stats-related keywords that hint at SQL mode
+_STATS_KEYWORDS = re.compile(
+    r"\b(wins?|loss(?:es)?|records?|how many|scores?|stats|"
+    r"view count|most viewed|most watched|least viewed|"
+    r"played each other|head to head|match(?:es)?)\b",
+    re.IGNORECASE,
+)
 
 
 def _init_engines():
     """Lazily initialize the query engines on first request."""
-    global _engines_ready, _router_engine, _vector_engine, _sql_engine
+    global _engines_ready, _vector_index, _vector_engine, _sql_engine, _player_names
 
     if _engines_ready:
         return
 
     from rag.query_engine import (
-        build_router_query_engine,
         build_vector_query_engine,
         get_llm,
         get_sql_query_engine,
@@ -81,11 +89,66 @@ def _init_engines():
     )
 
     get_llm()
-    _router_engine = build_router_query_engine()
-    vector_index = build_vector_query_engine()
-    _vector_engine = get_vector_query_engine(vector_index)
+    _vector_index = build_vector_query_engine()
+    _vector_engine = get_vector_query_engine(_vector_index)
     _sql_engine = get_sql_query_engine()
+
+    # Load player names for smart routing
+    import sqlite3
+    from rag.config import DB_PATH
+    try:
+        conn = sqlite3.connect(str(DB_PATH))
+        rows = conn.execute("SELECT name FROM players ORDER BY LENGTH(name) DESC").fetchall()
+        _player_names = [r[0] for r in rows]
+        conn.close()
+        log.info("Loaded %d player names for smart routing", len(_player_names))
+    except Exception:
+        log.warning("Could not load player names — smart routing disabled")
+
     _engines_ready = True
+
+
+def _detect_players(query: str) -> list[str]:
+    """Return player names found in the query (case-insensitive, longest first)."""
+    q_lower = query.lower()
+    found = []
+    for name in _player_names:
+        name_lower = name.lower()
+        # Use word-boundary matching to avoid false positives
+        # e.g. "AB" matching inside "about"
+        pattern = r'(?<![a-z])' + re.escape(name_lower) + r'(?![a-z])'
+        if re.search(pattern, q_lower):
+            found.append(name)
+    return found
+
+
+def _build_filtered_vector_engine(player_names: list[str]):
+    """Create a vector query engine with metadata filters for the given players."""
+    from llama_index.core.vector_stores import (
+        FilterCondition,
+        FilterOperator,
+        MetadataFilter,
+        MetadataFilters,
+    )
+    from rag.query_engine import get_llm
+    from rag.config import TOP_K
+
+    filters_list = []
+    for name in player_names:
+        filters_list.append(
+            MetadataFilter(key="player1", value=name, operator=FilterOperator.EQ)
+        )
+        filters_list.append(
+            MetadataFilter(key="player2", value=name, operator=FilterOperator.EQ)
+        )
+
+    filters = MetadataFilters(filters=filters_list, condition=FilterCondition.OR)
+
+    return _vector_index.as_query_engine(
+        llm=get_llm(),
+        similarity_top_k=TOP_K,
+        filters=filters,
+    )
 
 
 def _get_session(request: Request) -> dict:
@@ -96,15 +159,7 @@ def _get_session(request: Request) -> dict:
         request.session["sid"] = sid
 
     if sid not in _sessions:
-        from llama_index.core.chat_engine import CondenseQuestionChatEngine
-        from rag.query_engine import get_llm
-
-        _init_engines()
-        chat_engine = CondenseQuestionChatEngine.from_defaults(
-            query_engine=_router_engine,
-            llm=get_llm(),
-        )
-        _sessions[sid] = {"chat_engine": chat_engine, "mode": "auto"}
+        _sessions[sid] = {"mode": "auto"}
 
     return _sessions[sid]
 
@@ -132,6 +187,12 @@ def _build_source_cards(source_nodes) -> list[dict]:
         if source_file in seen:
             continue
         seen.add(source_file)
+
+        # Skip nodes with no meaningful metadata (e.g. SQL results)
+        player1 = meta.get("player1", "")
+        player2 = meta.get("player2", "")
+        if not player1 and not player2:
+            continue
 
         youtube_url = meta.get("youtube_url", "")
         video_id = _extract_video_id(youtube_url)
@@ -204,52 +265,48 @@ async def chat(request: Request):
             _init_engines()
             source_nodes = []
 
-            # Run the blocking LLM call in a thread
+            # Determine which engine to use
             if mode == "sql":
-                response = await asyncio.to_thread(_sql_engine.query, message)
-                text = str(response)
-                # Yield the full text in small chunks to simulate streaming
-                for i in range(0, len(text), 20):
-                    chunk = text[i : i + 20]
-                    yield f"event: token\ndata: {json.dumps(chunk)}\n\n"
-                    await asyncio.sleep(0.01)
-                if hasattr(response, "source_nodes"):
-                    source_nodes = response.source_nodes
-
+                engine = _sql_engine
+                route_label = "sql"
             elif mode == "vector":
-                response = await asyncio.to_thread(_vector_engine.query, message)
-                text = str(response)
-                for i in range(0, len(text), 20):
-                    chunk = text[i : i + 20]
-                    yield f"event: token\ndata: {json.dumps(chunk)}\n\n"
-                    await asyncio.sleep(0.01)
-                if hasattr(response, "source_nodes"):
-                    source_nodes = response.source_nodes
-
+                engine = _vector_engine
+                route_label = "vector"
             else:
-                # Auto mode — try router with streaming, fallback to vector
-                chat_engine = session["chat_engine"]
-                try:
-                    response = await asyncio.to_thread(
-                        chat_engine.stream_chat, message
-                    )
-                    for token in response.response_gen:
-                        yield f"event: token\ndata: {json.dumps(token)}\n\n"
-                    if hasattr(response, "source_nodes"):
-                        source_nodes = response.source_nodes
-                except Exception as e:
-                    log.warning("Router failed (%s), falling back to vector", e)
-                    yield f"event: token\ndata: {json.dumps('(auto-routing failed, using vector search) ')}\n\n"
-                    response = await asyncio.to_thread(
-                        _vector_engine.query, message
-                    )
-                    text = str(response)
-                    for i in range(0, len(text), 20):
-                        chunk = text[i : i + 20]
-                        yield f"event: token\ndata: {json.dumps(chunk)}\n\n"
-                        await asyncio.sleep(0.01)
-                    if hasattr(response, "source_nodes"):
-                        source_nodes = response.source_nodes
+                # Smart auto-routing: detect player names and stats keywords
+                players = _detect_players(message)
+                has_stats = bool(_STATS_KEYWORDS.search(message))
+
+                if players and has_stats:
+                    # Both player names AND stats keywords → try SQL first
+                    engine = _sql_engine
+                    route_label = "sql"
+                elif players:
+                    # Player names found → metadata-filtered vector search
+                    engine = _build_filtered_vector_engine(players)
+                    route_label = f"vector (filtered: {', '.join(players)})"
+                elif has_stats:
+                    # Pure stats query → SQL
+                    engine = _sql_engine
+                    route_label = "sql"
+                else:
+                    # Default → general vector search
+                    engine = _vector_engine
+                    route_label = "vector"
+
+                # Emit a small routing note
+                note = f"⚡ {route_label}"
+                yield f"event: route\ndata: {json.dumps(note)}\n\n"
+
+            # Run the query
+            response = await asyncio.to_thread(engine.query, message)
+            text = str(response)
+            for i in range(0, len(text), 20):
+                chunk = text[i : i + 20]
+                yield f"event: token\ndata: {json.dumps(chunk)}\n\n"
+                await asyncio.sleep(0.01)
+            if hasattr(response, "source_nodes"):
+                source_nodes = response.source_nodes
 
             # Send source cards as a single event
             cards = _build_source_cards(source_nodes)
@@ -275,7 +332,7 @@ async def chat(request: Request):
 @app.post("/api/chat/clear")
 async def chat_clear(request: Request):
     session = _get_session(request)
-    session["chat_engine"].reset()
+    session["mode"] = "auto"
     return {"status": "ok"}
 
 

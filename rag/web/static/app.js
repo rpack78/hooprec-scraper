@@ -10,6 +10,7 @@
 // ---------------------------------------------------------------------------
 let isStreaming = false;
 let chatStarted = false;
+let streamingRawText = '';  // accumulates raw text during streaming
 
 // ---------------------------------------------------------------------------
 // Chat submission
@@ -61,6 +62,7 @@ function sendMessage(message) {
     appendMessage('user', message);
 
     // Create assistant bubble (will stream into)
+    streamingRawText = '';
     const assistantBubble = appendMessage('assistant', '');
     const contentEl = assistantBubble.querySelector('.msg-content');
     contentEl.classList.add('typing-cursor');
@@ -117,9 +119,17 @@ function handleSSEEvent(eventType, data, contentEl, sourceCards) {
         case 'token':
             try {
                 const token = JSON.parse(data);
-                contentEl.textContent += token;
+                streamingRawText += token;
+                contentEl.innerHTML = renderMarkdown(streamingRawText);
                 scrollToBottom();
             } catch (e) { /* ignore parse errors */ }
+            break;
+
+        case 'route':
+            try {
+                const note = JSON.parse(data);
+                streamingRawText += `{{route:${note}}}`;
+            } catch (e) { /* ignore */ }
             break;
 
         case 'sources':
@@ -136,7 +146,8 @@ function handleSSEEvent(eventType, data, contentEl, sourceCards) {
         case 'error':
             try {
                 const errMsg = JSON.parse(data);
-                contentEl.textContent += `\n\n⚠️ Error: ${errMsg}`;
+                streamingRawText += `\n\n⚠️ Error: ${errMsg}`;
+                contentEl.innerHTML = renderMarkdown(streamingRawText);
             } catch (e) { /* ignore */ }
             break;
     }
@@ -144,6 +155,11 @@ function handleSSEEvent(eventType, data, contentEl, sourceCards) {
 
 function finishStream(contentEl, input, btn) {
     contentEl.classList.remove('typing-cursor');
+    // Final markdown render pass
+    if (streamingRawText) {
+        contentEl.innerHTML = renderMarkdown(streamingRawText);
+        streamingRawText = '';
+    }
     isStreaming = false;
     input.disabled = false;
     btn.disabled = false;
@@ -166,8 +182,12 @@ function appendMessage(role, text) {
         : 'max-w-[80%] bg-hoop-card border border-hoop-border rounded-2xl rounded-tl-sm px-4 py-3 text-sm';
 
     const content = document.createElement('div');
-    content.className = 'msg-content whitespace-pre-wrap break-words leading-relaxed';
-    content.textContent = text;
+    content.className = 'msg-content break-words leading-relaxed prose-chat';
+    if (role === 'user') {
+        content.textContent = text;
+    } else {
+        content.innerHTML = text ? renderMarkdown(text) : '';
+    }
 
     bubble.appendChild(content);
     wrapper.appendChild(bubble);
@@ -241,6 +261,100 @@ function setMode(mode) {
         active.classList.add('bg-hoop-orange', 'text-white');
         active.classList.remove('text-gray-400', 'hover:text-white');
     }
+}
+
+// ---------------------------------------------------------------------------
+// Markdown rendering (lightweight — no external library)
+// ---------------------------------------------------------------------------
+
+function renderMarkdown(raw) {
+    if (!raw) return '';
+
+    // First, escape HTML to prevent XSS
+    let text = raw.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+
+    // Handle route tags (injected by route SSE event, not user text)
+    text = text.replace(
+        /\{\{route:(.+?)\}\}/g,
+        '<span class="system-note">$1</span>'
+    );
+
+    // Split into lines for block-level processing
+    const lines = text.split('\n');
+    const blocks = [];
+    let i = 0;
+
+    while (i < lines.length) {
+        const line = lines[i];
+
+        // Numbered list item: "1. text" or "1) text"
+        if (/^\d+[\.\)]\s+/.test(line)) {
+            const items = [];
+            while (i < lines.length && /^\d+[\.\)]\s+/.test(lines[i])) {
+                items.push('<li>' + inlineFormat(lines[i].replace(/^\d+[\.\)]\s+/, '')) + '</li>');
+                i++;
+            }
+            blocks.push('<ol>' + items.join('') + '</ol>');
+            continue;
+        }
+
+        // Unordered list item: "- text" or "* text"
+        if (/^[\-\*]\s+/.test(line)) {
+            const items = [];
+            while (i < lines.length && /^[\-\*]\s+/.test(lines[i])) {
+                items.push('<li>' + inlineFormat(lines[i].replace(/^[\-\*]\s+/, '')) + '</li>');
+                i++;
+            }
+            blocks.push('<ul>' + items.join('') + '</ul>');
+            continue;
+        }
+
+        // Indented sub-item: "  - text"
+        if (/^\s{2,}[\-\*]\s+/.test(line)) {
+            const items = [];
+            while (i < lines.length && /^\s{2,}[\-\*]\s+/.test(lines[i])) {
+                items.push('<li>' + inlineFormat(lines[i].replace(/^\s+[\-\*]\s+/, '')) + '</li>');
+                i++;
+            }
+            blocks.push('<ul style="margin-left:1em">' + items.join('') + '</ul>');
+            continue;
+        }
+
+        // Empty line = paragraph break
+        if (line.trim() === '') {
+            i++;
+            continue;
+        }
+
+        // Regular paragraph — collect consecutive non-empty, non-list lines
+        const paraLines = [];
+        while (i < lines.length && lines[i].trim() !== '' && !/^[\-\*]\s+/.test(lines[i]) && !/^\d+[\.\)]\s+/.test(lines[i]) && !/^\s{2,}[\-\*]/.test(lines[i])) {
+            paraLines.push(lines[i]);
+            i++;
+        }
+        if (paraLines.length > 0) {
+            blocks.push('<p>' + inlineFormat(paraLines.join('<br>')) + '</p>');
+        }
+    }
+
+    return blocks.join('');
+}
+
+function inlineFormat(text) {
+    // Bold: **text** or __text__
+    text = text.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+    text = text.replace(/__(.+?)__/g, '<strong>$1</strong>');
+
+    // Italic: *text* or _text_ (but not inside URLs)
+    text = text.replace(/(?<!\w)\*([^*]+?)\*(?!\w)/g, '<em>$1</em>');
+
+    // Auto-link URLs
+    text = text.replace(
+        /(https?:\/\/[^\s<]+)/g,
+        '<a href="$1" target="_blank" rel="noopener">$1</a>'
+    );
+
+    return text;
 }
 
 // ---------------------------------------------------------------------------
