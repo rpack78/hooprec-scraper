@@ -318,8 +318,26 @@ rag/
 ├── query_engine.py    # Vector + SQL engines, hybrid router
 ├── cli.py             # Interactive CLI REPL
 ├── config.py          # Paths, model names, chunk sizes (env-configurable)
-└── requirements.txt   # LlamaIndex + ChromaDB deps
+├── requirements.txt   # LlamaIndex + ChromaDB deps
+└── tests/
+    └── test_ingest.py # Unit tests (35 tests)
 ```
+
+### Tests
+
+35 unit tests covering the ingestion pipeline and CLI formatting. No Ollama, ChromaDB, or live data needed — all tests use temporary markdown fixtures.
+
+```bash
+python -m pytest rag/tests/ -v
+```
+
+| Module | Tests | What's covered |
+|---|---|---|
+| `parse_youtube_md` | 16 | Player names, dates, URLs, views/likes as ints, transcript/comment splitting, edge cases |
+| `_parse_int` | 3 | Comma-separated numbers, zero |
+| `build_documents` | 9 | Doc counts, metadata propagation, excluded keys, empty dirs, non-yt files |
+| `_filter_new_documents` | 3 | Resumability: skip ingested, keep new, partial filter |
+| `_format_sources` | 4 | CLI citation formatting, deduplication, missing attributes |
 
 ---
 
