@@ -56,7 +56,10 @@
 
         <!-- Channel -->
         {% if game.channel %}
-        <div class="text-xs text-gray-500">{{ game.channel }}</div>
+        <div class="text-xs text-gray-500 flex items-center gap-1.5">
+            <img src="/api/channel-icon/{{ game.channel | urlencode }}" alt="" class="w-4 h-4 rounded-full" loading="lazy" onerror="this.style.display='none'" />
+            {{ game.channel }}
+        </div>
         {% endif %}
 
         <!-- Actions -->

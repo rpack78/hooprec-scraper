@@ -65,11 +65,27 @@ _player_names: list[str] = []   # sorted longest-first for greedy matching
 # session_id -> {"mode": "auto"|"sql"|"vector"}
 _sessions: dict[str, dict] = {}
 
+# Pre-cached responses for suggested prompts
+_preloaded_cache: dict[str, dict] = {}  # message -> {"text": ..., "sources": [...]}
+_SUGGESTED_PROMPTS = [
+    "What are the most exciting games to watch?",
+    "What is the greatest comeback?",
+    "Who do fans think is the best 1v1 player?",
+    "What games had the most trash talk?",
+]
+
 # Stats-related keywords that hint at SQL mode
 _STATS_KEYWORDS = re.compile(
     r"\b(wins?|loss(?:es)?|records?|how many|scores?|stats|"
     r"view count|most viewed|most watched|least viewed|"
     r"played each other|head to head|match(?:es)?)\b",
+    re.IGNORECASE,
+)
+
+# List-all / chronological keywords → should go to SQL for comprehensive results
+_LIST_KEYWORDS = re.compile(
+    r"\b(all\s+(the\s+)?games|every\s+game|chronological|"
+    r"in\s+order|list\s+(all|every|the)|full\s+list|show\s+me\s+all)\b",
     re.IGNORECASE,
 )
 
@@ -200,6 +216,21 @@ def _build_source_cards(source_nodes) -> list[dict]:
             f"https://img.youtube.com/vi/{video_id}/hqdefault.jpg" if video_id else ""
         )
 
+        # Build a short summary from the title or content
+        title = meta.get("title", "")
+        content_preview = node.get_content()[:300].replace("\n", " ").strip()
+        # Use the YouTube title as the summary if available, otherwise a content snippet
+        if title:
+            summary = title
+        elif content_preview:
+            # Truncate to ~100 chars at a word boundary
+            if len(content_preview) > 100:
+                summary = content_preview[:100].rsplit(" ", 1)[0] + "…"
+            else:
+                summary = content_preview
+        else:
+            summary = ""
+
         cards.append(
             {
                 "player1": meta.get("player1", ""),
@@ -212,7 +243,7 @@ def _build_source_cards(source_nodes) -> list[dict]:
                 "channel": meta.get("channel", ""),
                 "views": meta.get("views"),
                 "score": round(getattr(node, "score", 0) or 0, 3),
-                "snippet": node.get_content()[:180].replace("\n", " "),
+                "summary": summary,
             }
         )
     return cards
@@ -221,6 +252,69 @@ def _build_source_cards(source_nodes) -> list[dict]:
 # ---------------------------------------------------------------------------
 # Routes
 # ---------------------------------------------------------------------------
+
+# YouTube channel avatar URLs (manually mapped for top channels)
+_CHANNEL_ICONS: dict[str, str] = {
+    "The Next Chapter": "https://yt3.googleusercontent.com/ytc/AIdro_kQEslYkBm2LO7vjJHVh2vjYFaOjbuVfiOlCfTlFJk7VJM=s88-c-k-c0x00ffffff-no-rj",
+    "Ballislife": "https://yt3.googleusercontent.com/ytc/AIdro_m7LoGQz6sN76YYFp-tKZfuaHIPMY7J7fibJYG4b0pu3w=s88-c-k-c0x00ffffff-no-rj",
+    "Off The Dribble": "https://yt3.googleusercontent.com/WgN7fp4MFNxTkXC_LYqPy7g5axOMGz6KLj1v2e7QXDK2pS-QQET1-VDjGd3teri2lcpH_sMIog=s88-c-k-c0x00ffffff-no-rj",
+    "BallislifeHoops": "https://yt3.googleusercontent.com/qfBJaxAqUTEM0Z3AdWkFqEG5DqSMrTnecYa4_XxwjGTDhSNAFqPe7J0UnGWS4wqN9Cf5jxZLFQ=s88-c-k-c0x00ffffff-no-rj",
+    "Uncle Skoob": "https://yt3.googleusercontent.com/JTFKnCaL7o81xj6c_Mu-e4Kps8cfLSV_29W_c6pWY59CtJuDPjC_v2IqNxTrZ40JgUWEfIlL=s88-c-k-c0x00ffffff-no-rj",
+    "Junes League": "https://yt3.googleusercontent.com/LhSzVRXv2j4eiDCFdRO9w_KBXl8rqB3rfbwKlAfvXVWh4BOqeBvd8sMcXL3RQ8G6d_RDM8gKYQ=s88-c-k-c0x00ffffff-no-rj",
+    "FreeSmokeTour": "https://yt3.googleusercontent.com/EY-t8wkxBZ5gxFLDqGpN_lPMyyLVG5IFv-4R8RkUGk8KUGwR01aqigxEd0Do-cLJp9GhZJwb=s88-c-k-c0x00ffffff-no-rj",
+}
+
+
+# ---------------------------------------------------------------------------
+# Preloading — warm the cache for suggested prompts on startup
+# ---------------------------------------------------------------------------
+
+_preload_started = False
+
+
+async def _preload_suggested():
+    """Run suggested prompts in background to cache responses."""
+    global _preload_started
+    if _preload_started:
+        return
+    _preload_started = True
+
+    log.info("Preloading %d suggested prompts in background…", len(_SUGGESTED_PROMPTS))
+    for prompt_text in _SUGGESTED_PROMPTS:
+        if prompt_text in _preloaded_cache:
+            continue
+        try:
+            _init_engines()
+            response = await asyncio.to_thread(_vector_engine.query, prompt_text)
+            text = str(response)
+            source_nodes = getattr(response, "source_nodes", [])
+            cards = _build_source_cards(source_nodes)
+            _preloaded_cache[prompt_text] = {"text": text, "sources": cards}
+            log.info("  Cached: %s (%d chars)", prompt_text[:40], len(text))
+        except Exception as e:
+            log.warning("  Failed to preload '%s': %s", prompt_text[:40], e)
+
+    log.info("Preloading complete (%d/%d cached)", len(_preloaded_cache), len(_SUGGESTED_PROMPTS))
+
+
+@app.on_event("startup")
+async def on_startup():
+    asyncio.create_task(_preload_suggested())
+
+
+@app.get("/api/channel-icon/{channel_name}")
+async def channel_icon(channel_name: str):
+    """Redirect to the YouTube channel avatar image."""
+    from fastapi.responses import RedirectResponse
+    url = _CHANNEL_ICONS.get(channel_name)
+    if url:
+        return RedirectResponse(url=url, status_code=302)
+    # Fallback: transparent 1x1 pixel
+    return Response(
+        content=b'\x47\x49\x46\x38\x39\x61\x01\x00\x01\x00\x80\x00\x00\xff\xff\xff\x00\x00\x00\x21\xf9\x04\x00\x00\x00\x00\x00\x2c\x00\x00\x00\x00\x01\x00\x01\x00\x00\x02\x02\x44\x01\x00\x3b',
+        media_type="image/gif",
+        headers={"Cache-Control": "public, max-age=86400"},
+    )
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -265,6 +359,19 @@ async def chat(request: Request):
             _init_engines()
             source_nodes = []
 
+            # Check preloaded cache for instant responses to suggested prompts
+            cached = _preloaded_cache.get(message)
+            if cached and mode in ("auto", "vector"):
+                yield f"event: route\ndata: {json.dumps('⚡ cached')}\n\n"
+                text = cached["text"]
+                for i in range(0, len(text), 40):
+                    chunk = text[i : i + 40]
+                    yield f"event: token\ndata: {json.dumps(chunk)}\n\n"
+                    await asyncio.sleep(0.005)
+                yield f"event: sources\ndata: {json.dumps(cached['sources'])}\n\n"
+                yield "event: done\ndata: {}\n\n"
+                return
+
             # Determine which engine to use
             if mode == "sql":
                 engine = _sql_engine
@@ -276,9 +383,18 @@ async def chat(request: Request):
                 # Smart auto-routing: detect player names and stats keywords
                 players = _detect_players(message)
                 has_stats = bool(_STATS_KEYWORDS.search(message))
+                has_list = bool(_LIST_KEYWORDS.search(message))
 
-                if players and has_stats:
+                if has_list and players:
+                    # "Show me all games with X in chronological order" → SQL
+                    engine = _sql_engine
+                    route_label = "sql (full list)"
+                elif players and has_stats:
                     # Both player names AND stats keywords → try SQL first
+                    engine = _sql_engine
+                    route_label = "sql"
+                elif has_list or has_stats:
+                    # Pure stats/list query → SQL
                     engine = _sql_engine
                     route_label = "sql"
                 elif players:
@@ -308,8 +424,29 @@ async def chat(request: Request):
             if hasattr(response, "source_nodes"):
                 source_nodes = response.source_nodes
 
-            # Send source cards as a single event
+            # Build source cards — from vector results, or from DB for SQL player queries
             cards = _build_source_cards(source_nodes)
+            if not cards and mode in ("auto", "sql"):
+                # SQL queries don't return source nodes; fetch player games from DB
+                players = _detect_players(message)
+                if players:
+                    from rag.web.db import get_player_games
+                    db_games = get_player_games(players, limit=10)
+                    for g in db_games:
+                        vid = g.get("video_id", "")
+                        cards.append({
+                            "player1": g.get("player1_name", ""),
+                            "player2": g.get("player2_name", ""),
+                            "youtube_url": g.get("youtube_url", ""),
+                            "video_id": vid,
+                            "thumbnail_url": f"https://img.youtube.com/vi/{vid}/hqdefault.jpg" if vid else "",
+                            "match_date": g.get("match_date", ""),
+                            "channel": g.get("channel_name", ""),
+                            "views": g.get("view_count"),
+                            "score": 0,
+                            "summary": g.get("title", ""),
+                        })
+
             yield f"event: sources\ndata: {json.dumps(cards)}\n\n"
 
             # Done signal

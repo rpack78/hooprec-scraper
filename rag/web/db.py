@@ -115,3 +115,37 @@ def get_game_count() -> int:
         return row["cnt"]
     finally:
         conn.close()
+
+
+def get_player_games(player_names: list[str], limit: int = 20) -> list[dict]:
+    """Return games for the given player(s), newest first, with YouTube metadata."""
+    conn = _connect()
+    try:
+        # Build OR conditions for each player name
+        conditions = []
+        params = []
+        for name in player_names:
+            conditions.append("(m.player1_name = ? OR m.player2_name = ?)")
+            params.extend([name, name])
+
+        where = " OR ".join(conditions)
+        rows = conn.execute(
+            f"""
+            SELECT
+                m.player1_name, m.player2_name,
+                m.player1_score, m.player2_score,
+                m.winner_name, m.match_date,
+                m.youtube_video_id AS video_id,
+                m.youtube_url,
+                yv.title, yv.channel_name, yv.view_count
+            FROM matches m
+            LEFT JOIN youtube_videos yv ON yv.video_id = m.youtube_video_id
+            WHERE m.youtube_video_id IS NOT NULL AND ({where})
+            ORDER BY m.match_date DESC
+            LIMIT ?
+            """,
+            (*params, limit),
+        ).fetchall()
+        return [dict(r) for r in rows]
+    finally:
+        conn.close()

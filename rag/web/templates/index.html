@@ -9,7 +9,7 @@
             <div class="flex items-center gap-3">
                 <span class="text-2xl">🏀</span>
                 <div>
-                    <h1 class="text-lg font-bold text-white">RecHoop</h1>
+                    <h1 class="text-lg font-bold text-white cursor-pointer hover:text-hoop-orange transition-colors" onclick="goHome()">RecHoop</h1>
                     <p class="text-xs text-gray-400">{{ game_count }} games indexed — Ask anything about 1v1 basketball</p>
                 </div>
             </div>
@@ -112,7 +112,7 @@
 
             <!-- ─────── Chat Input ─────── -->
             <div class="flex-none border-t border-hoop-border bg-hoop-dark/80 backdrop-blur-sm px-4 py-3">
-                <form id="chat-form" onsubmit="handleSubmit(event)" class="max-w-3xl mx-auto flex gap-3">
+                <form id="chat-form" onsubmit="handleSubmit(event)" data-hx-disable class="max-w-3xl mx-auto flex gap-3">
                     <input type="text" id="chat-input"
                            placeholder="Ask about 1v1 basketball games..."
                            autocomplete="off"
@@ -133,7 +133,7 @@
                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
                               d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1" />
                     </svg>
-                    Sources
+                    Videos You May Like
                 </h3>
                 <div id="source-cards" class="space-y-3">
                     <p class="text-xs text-gray-500 italic">Sources will appear here when you ask a question.</p>

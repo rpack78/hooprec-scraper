@@ -165,6 +165,16 @@ function finishStream(contentEl, input, btn) {
     btn.disabled = false;
     input.focus();
     scrollToBottom();
+
+    // Add "Show me more" button after the response
+    const moreBtn = document.createElement('button');
+    moreBtn.className = 'text-xs text-hoop-orange hover:text-hoop-amber transition-colors mt-2 flex items-center gap-1';
+    moreBtn.innerHTML = '↓ Show me more';
+    moreBtn.onclick = () => {
+        moreBtn.remove();
+        sendMessage('Show me more results like the previous answer, but different games I haven\'t seen yet');
+    };
+    contentEl.parentElement.appendChild(moreBtn);
 }
 
 // ---------------------------------------------------------------------------
@@ -221,9 +231,9 @@ function renderSourceCards(cards, container) {
             ` : ''}
             <div class="p-3 space-y-1.5">
                 <div class="flex items-center justify-between">
-                    <span class="text-sm font-bold">
+                    <a href="${escapeAttr(card.youtube_url)}" target="_blank" rel="noopener" class="text-sm font-bold hover:text-hoop-orange transition-colors">
                         ${escapeHtml(card.player1)} <span class="text-gray-500">vs</span> ${escapeHtml(card.player2)}
-                    </span>
+                    </a>
                     ${card.score ? `
                         <span class="text-xs bg-hoop-orange/20 text-hoop-orange px-1.5 py-0.5 rounded font-mono">
                             ${Math.round(card.score * 100)}%
@@ -232,14 +242,15 @@ function renderSourceCards(cards, container) {
                 </div>
                 <div class="flex items-center gap-3 text-xs text-gray-400">
                     ${card.match_date ? `<span>${escapeHtml(card.match_date)}</span>` : ''}
-                    ${card.section ? `<span class="capitalize">${escapeHtml(card.section)}</span>` : ''}
+                    ${card.channel ? `
+                        <span class="flex items-center gap-1">
+                            <img src="/api/channel-icon/${encodeURIComponent(card.channel)}" alt="" class="w-3.5 h-3.5 rounded-full inline" loading="lazy" onerror="this.style.display='none'" />
+                            ${escapeHtml(card.channel)}
+                        </span>
+                    ` : ''}
                     ${card.views ? `<span>${Number(card.views).toLocaleString()} views</span>` : ''}
                 </div>
-                ${card.snippet ? `<p class="text-xs text-gray-400 leading-relaxed line-clamp-2">${escapeHtml(card.snippet)}…</p>` : ''}
-                <a href="${escapeAttr(card.youtube_url)}" target="_blank" rel="noopener"
-                   class="inline-flex items-center gap-1 text-xs text-hoop-orange hover:text-hoop-amber transition-colors mt-1">
-                    ▶ Watch on YouTube
-                </a>
+                ${card.summary ? `<p class="text-xs text-gray-300 leading-relaxed line-clamp-2">${escapeHtml(card.summary)}</p>` : ''}
             </div>
         </div>
     `).join('');
@@ -371,6 +382,11 @@ function clearChat() {
     document.getElementById('landing').classList.remove('hidden');
     document.getElementById('chat-messages').classList.add('hidden');
     document.getElementById('source-panel').classList.add('hidden');
+}
+
+function goHome() {
+    if (isStreaming) return;
+    clearChat();
 }
 
 // ---------------------------------------------------------------------------
