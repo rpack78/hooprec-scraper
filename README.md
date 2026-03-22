@@ -127,7 +127,18 @@ hooprec-scraper/
 │   ├── query_engine.py            # Vector + SQL + hybrid router
 │   ├── cli.py                     # Interactive CLI REPL
 │   ├── config.py                  # Centralized configuration
-│   └── requirements.txt           # LlamaIndex + ChromaDB deps
+│   ├── requirements.txt           # LlamaIndex + ChromaDB + FastAPI deps
+│   ├── tests/
+│   │   └── test_ingest.py         # Unit tests (35 tests)
+│   └── web/                       # Phase 3.1 — Web chat UI
+│       ├── app.py                 # FastAPI app + SSE streaming
+│       ├── db.py                  # Direct SQLite queries for UI
+│       ├── templates/             # Jinja2 templates
+│       │   ├── base.html          # Page shell (Tailwind + htmx CDN)
+│       │   ├── index.html         # Landing page + chat interface
+│       │   └── partials/          # htmx partial templates
+│       └── static/
+│           └── app.js             # SSE streaming + chat logic
 └── README.md
 ```
 
@@ -318,9 +329,18 @@ rag/
 ├── query_engine.py    # Vector + SQL engines, hybrid router
 ├── cli.py             # Interactive CLI REPL
 ├── config.py          # Paths, model names, chunk sizes (env-configurable)
-├── requirements.txt   # LlamaIndex + ChromaDB deps
-└── tests/
-    └── test_ingest.py # Unit tests (35 tests)
+├── requirements.txt   # LlamaIndex + ChromaDB + FastAPI deps
+├── tests/
+│   └── test_ingest.py # Unit tests (35 tests)
+└── web/               # Phase 3.1 — Web chat UI
+    ├── app.py         # FastAPI app, SSE streaming, session mgmt
+    ├── db.py          # Direct SQLite queries (latest games, comments)
+    ├── templates/
+    │   ├── base.html      # Shell: Tailwind + htmx CDNs, dark theme
+    │   ├── index.html     # Landing page + chat (two-state layout)
+    │   └── partials/      # game_cards, source_cards, comments
+    └── static/
+        └── app.js     # SSE streaming, chat UI, source rendering
 ```
 
 ### Tests
@@ -338,6 +358,51 @@ python -m pytest rag/tests/ -v
 | `build_documents` | 9 | Doc counts, metadata propagation, excluded keys, empty dirs, non-yt files |
 | `_filter_new_documents` | 3 | Resumability: skip ingested, keep new, partial filter |
 | `_format_sources` | 4 | CLI citation formatting, deduplication, missing attributes |
+
+---
+
+## Phase 3.1 — Web Chat UI 🏀
+
+**Status: Active.** Browser-based chat interface with game discovery. All local, no build step.
+
+### Stack
+
+| Component | Choice | Why |
+|---|---|---|
+| **Web framework** | FastAPI | Async, lightweight, SSE support |
+| **Templating** | Jinja2 | Server-rendered, built into FastAPI |
+| **Styling** | Tailwind CSS (CDN) | No build step, rapid prototyping |
+| **Dynamic updates** | htmx | Partial page updates without SPA complexity |
+| **Streaming** | Server-Sent Events | Tokens stream in real-time like ChatGPT |
+
+### Features
+
+- **Landing page** — Latest games grid with YouTube thumbnails, scores, "winner" highlighting, view counts
+- **Streaming chat** — Tokens appear in real-time as the LLM generates them
+- **Source cards** — After each response, source citations display as cards with thumbnails, relevance scores, snippets, and YouTube links
+- **Game discovery** — Quick prompt buttons ("Most exciting games", "Greatest comeback", etc.)
+- **Top comments** — Click to load top YouTube comments for any game (via htmx)
+- **Mode switching** — Toggle between Auto/Vector/SQL routing from the header
+- **"Ask about this game"** — Click any game card to pre-fill a question about that matchup
+- **Dark theme** — Basketball aesthetic with orange/amber accents
+
+### Running it
+
+```bash
+# From project root (not rag/ directory)
+pip install -r rag/requirements.txt
+python -m rag.web.app
+```
+
+Open http://localhost:8000 in your browser.
+
+### Configuration
+
+| Variable | Default | Description |
+|---|---|---|
+| `RAG_WEB_PORT` | `8000` | Web server port |
+
+All other RAG settings (LLM model, embeddings, TOP_K, etc.) are shared with the CLI — see the [Phase 3 configuration table](#configuration) above.
 
 ---
 
@@ -369,7 +434,8 @@ ollama pull nomic-embed-text
 cd ../
 python -m rag.ingest              # ingest new files into ChromaDB
 python -m rag.ingest --reset      # wipe & re-ingest everything
-python -m rag.cli                 # start the interactive REPL
+python -m rag.cli                 # start the interactive CLI REPL
+python -m rag.web.app             # start the web UI (localhost:8000)
 ```
 
 **REPL example session:**

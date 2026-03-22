@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html lang="en" class="h-full">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>RecHoop — 1v1 Basketball Search</title>
+
+    <!-- Tailwind CSS (Play CDN — local-only, no build step) -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        'hoop-orange': '#F97316',
+                        'hoop-amber':  '#F59E0B',
+                        'hoop-dark':   '#0F172A',
+                        'hoop-darker': '#020617',
+                        'hoop-card':   '#1E293B',
+                        'hoop-border': '#334155',
+                    }
+                }
+            }
+        }
+    </script>
+
+    <!-- htmx -->
+    <script src="https://unpkg.com/htmx.org@2.0.4"></script>
+
+    <style>
+        /* Custom scrollbar */
+        ::-webkit-scrollbar { width: 6px; }
+        ::-webkit-scrollbar-track { background: #0F172A; }
+        ::-webkit-scrollbar-thumb { background: #334155; border-radius: 3px; }
+        ::-webkit-scrollbar-thumb:hover { background: #475569; }
+
+        /* Streaming cursor */
+        .typing-cursor::after {
+            content: '▊';
+            animation: blink 1s step-end infinite;
+            color: #F97316;
+        }
+        @keyframes blink { 50% { opacity: 0; } }
+
+        /* Smooth fade-in for cards */
+        .fade-in {
+            animation: fadeIn 0.3s ease-in-out;
+        }
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(8px); }
+            to   { opacity: 1; transform: translateY(0); }
+        }
+
+        /* Source card shimmer while loading */
+        .shimmer {
+            background: linear-gradient(90deg, #1E293B 25%, #334155 50%, #1E293B 75%);
+            background-size: 200% 100%;
+            animation: shimmer 1.5s infinite;
+        }
+        @keyframes shimmer {
+            0%   { background-position: 200% 0; }
+            100% { background-position: -200% 0; }
+        }
+    </style>
+</head>
+<body class="h-full bg-hoop-darker text-gray-100 antialiased">
+    {% block content %}{% endblock %}
+
+    <script src="/static/app.js"></script>
+</body>
+</html>

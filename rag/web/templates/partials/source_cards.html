@@ -1,0 +1,46 @@
+<!-- partials/source_cards.html — Rendered after a chat response with source citations -->
+{% for card in cards %}
+<div class="bg-hoop-card rounded-lg overflow-hidden border border-hoop-border hover:border-hoop-orange/40 transition-all fade-in">
+    <a href="{{ card.youtube_url }}" target="_blank" rel="noopener" class="block">
+        {% if card.thumbnail_url %}
+        <img src="{{ card.thumbnail_url }}" alt="{{ card.player1 }} vs {{ card.player2 }}"
+             class="w-full aspect-video object-cover hover:brightness-110 transition-all"
+             loading="lazy" />
+        {% endif %}
+    </a>
+    <div class="p-3 space-y-1.5">
+        <!-- Players -->
+        <div class="flex items-center justify-between">
+            <span class="text-sm font-bold">
+                {{ card.player1 }} <span class="text-gray-500">vs</span> {{ card.player2 }}
+            </span>
+            {% if card.score %}
+            <span class="text-xs bg-hoop-orange/20 text-hoop-orange px-1.5 py-0.5 rounded font-mono">
+                {{ '%.0f' % (card.score * 100) }}%
+            </span>
+            {% endif %}
+        </div>
+
+        <!-- Meta -->
+        <div class="flex items-center gap-3 text-xs text-gray-400">
+            {% if card.match_date %}<span>{{ card.match_date }}</span>{% endif %}
+            {% if card.section %}<span class="capitalize">{{ card.section }}</span>{% endif %}
+            {% if card.views %}<span>{{ '{:,}'.format(card.views) }} views</span>{% endif %}
+        </div>
+
+        <!-- Snippet -->
+        {% if card.snippet %}
+        <p class="text-xs text-gray-400 leading-relaxed line-clamp-2">{{ card.snippet }}…</p>
+        {% endif %}
+
+        <!-- Link -->
+        <a href="{{ card.youtube_url }}" target="_blank" rel="noopener"
+           class="inline-flex items-center gap-1 text-xs text-hoop-orange hover:text-hoop-amber transition-colors mt-1">
+            <svg class="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 24 24">
+                <path d="M10 15l5.19-3L10 9v6m11.56-7.83c.13.47.22 1.1.28 1.9.07.8.1 1.49.1 2.09L22 12c0 2.19-.16 3.8-.44 4.83-.25.9-.83 1.48-1.73 1.73-.47.13-1.33.22-2.65.28-1.3.07-2.49.1-3.59.1L12 19c-4.19 0-6.8-.16-7.83-.44-.9-.25-1.48-.83-1.73-1.73-.13-.47-.22-1.1-.28-1.9-.07-.8-.1-1.49-.1-2.09L2 12c0-2.19.16-3.8.44-4.83.25-.9.83-1.48 1.73-1.73.47-.13 1.33-.22 2.65-.28 1.3-.07 2.49-.1 3.59-.1L12 5c4.19 0 6.8.16 7.83.44.9.25 1.48.83 1.73 1.73z"/>
+            </svg>
+            Watch on YouTube
+        </a>
+    </div>
+</div>
+{% endfor %}

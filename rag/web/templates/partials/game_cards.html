@@ -1,0 +1,82 @@
+<!-- partials/game_card.html — Rendered for each game on the landing page -->
+{% for game in games %}
+<div class="bg-hoop-card rounded-xl overflow-hidden border border-hoop-border hover:border-hoop-orange/50 transition-all duration-200 group fade-in">
+    <!-- Thumbnail -->
+    <a href="{{ game.youtube_url }}" target="_blank" rel="noopener" class="block relative">
+        {% if game.thumbnail_url %}
+        <img src="{{ game.thumbnail_url }}" alt="{{ game.player1 }} vs {{ game.player2 }}"
+             class="w-full aspect-video object-cover group-hover:brightness-110 transition-all"
+             loading="lazy" />
+        {% else %}
+        <div class="w-full aspect-video bg-hoop-border flex items-center justify-center text-gray-500">
+            No thumbnail
+        </div>
+        {% endif %}
+        <!-- Play overlay -->
+        <div class="absolute inset-0 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity bg-black/30">
+            <svg class="w-14 h-14 text-white/90" fill="currentColor" viewBox="0 0 24 24">
+                <path d="M8 5v14l11-7z"/>
+            </svg>
+        </div>
+        <!-- Duration badge -->
+        {% if game.duration_sec %}
+        <span class="absolute bottom-2 right-2 bg-black/80 text-xs text-white px-1.5 py-0.5 rounded">
+            {{ (game.duration_sec // 60) }}:{{ '%02d' % (game.duration_sec % 60) }}
+        </span>
+        {% endif %}
+    </a>
+
+    <!-- Info -->
+    <div class="p-3 space-y-2">
+        <!-- Players + Score -->
+        <div class="flex items-center justify-between gap-2">
+            <div class="min-w-0">
+                <h3 class="text-sm font-bold truncate">
+                    <span class="{% if game.winner == game.player1 %}text-hoop-orange{% endif %}">{{ game.player1 }}</span>
+                    <span class="text-gray-500 mx-1">vs</span>
+                    <span class="{% if game.winner == game.player2 %}text-hoop-orange{% endif %}">{{ game.player2 }}</span>
+                </h3>
+            </div>
+            {% if game.player1_score is not none and game.player2_score is not none %}
+            <span class="text-xs font-mono bg-hoop-darker px-2 py-0.5 rounded whitespace-nowrap">
+                {{ game.player1_score }}-{{ game.player2_score }}
+            </span>
+            {% endif %}
+        </div>
+
+        <!-- Meta row -->
+        <div class="flex items-center justify-between text-xs text-gray-400">
+            <span>{{ game.match_date or '' }}</span>
+            <div class="flex items-center gap-2">
+                {% if game.view_count %}
+                <span>{{ '{:,}'.format(game.view_count) }} views</span>
+                {% endif %}
+            </div>
+        </div>
+
+        <!-- Channel -->
+        {% if game.channel %}
+        <div class="text-xs text-gray-500">{{ game.channel }}</div>
+        {% endif %}
+
+        <!-- Actions -->
+        <div class="flex items-center gap-2 pt-1">
+            <button class="text-xs text-gray-400 hover:text-hoop-orange transition-colors"
+                    onclick="askAboutGame('{{ game.player1 }}', '{{ game.player2 }}')">
+                💬 Ask about this game
+            </button>
+            <button class="text-xs text-gray-400 hover:text-hoop-amber transition-colors"
+                    hx-get="/api/games/{{ game.video_id }}/comments"
+                    hx-target="#comments-{{ game.video_id }}"
+                    hx-swap="innerHTML"
+                    hx-indicator="#spinner-{{ game.video_id }}">
+                💬 Comments
+                <span id="spinner-{{ game.video_id }}" class="htmx-indicator text-xs">⏳</span>
+            </button>
+        </div>
+
+        <!-- Comments container (loaded via htmx) -->
+        <div id="comments-{{ game.video_id }}"></div>
+    </div>
+</div>
+{% endfor %}

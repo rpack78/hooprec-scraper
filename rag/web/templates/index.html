@@ -1,0 +1,114 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div id="app" class="flex flex-col h-screen">
+
+    <!-- ═══════════════════════ HEADER ═══════════════════════ -->
+    <header class="flex-none border-b border-hoop-border bg-hoop-dark/80 backdrop-blur-sm px-4 py-3">
+        <div class="max-w-7xl mx-auto flex items-center justify-between">
+            <div class="flex items-center gap-3">
+                <span class="text-2xl">🏀</span>
+                <div>
+                    <h1 class="text-lg font-bold text-white">RecHoop</h1>
+                    <p class="text-xs text-gray-400">{{ game_count }} games indexed — Ask anything about 1v1 basketball</p>
+                </div>
+            </div>
+            <div class="flex items-center gap-2">
+                <!-- Mode selector -->
+                <div class="flex bg-hoop-darker rounded-lg p-0.5 text-xs">
+                    <button onclick="setMode('auto')"   id="mode-auto"   class="mode-btn px-2.5 py-1 rounded-md transition-colors bg-hoop-orange text-white">Auto</button>
+                    <button onclick="setMode('vector')" id="mode-vector" class="mode-btn px-2.5 py-1 rounded-md transition-colors text-gray-400 hover:text-white">Vector</button>
+                    <button onclick="setMode('sql')"    id="mode-sql"    class="mode-btn px-2.5 py-1 rounded-md transition-colors text-gray-400 hover:text-white">SQL</button>
+                </div>
+                <!-- Clear chat -->
+                <button onclick="clearChat()" class="text-xs text-gray-400 hover:text-white transition-colors px-2 py-1 rounded hover:bg-hoop-card"
+                        title="Clear conversation">
+                    🗑️ Clear
+                </button>
+            </div>
+        </div>
+    </header>
+
+    <!-- ═══════════════════════ MAIN CONTENT ═══════════════════════ -->
+    <div class="flex-1 flex overflow-hidden">
+
+        <!-- ─────── LEFT: Chat Thread ─────── -->
+        <div class="flex-1 flex flex-col min-w-0">
+            <div id="chat-container" class="flex-1 overflow-y-auto px-4 py-6">
+
+                <!-- Landing state: shown before first message -->
+                <div id="landing" class="max-w-5xl mx-auto">
+                    <div class="text-center mb-8">
+                        <h2 class="text-3xl font-bold text-white mb-2">Find the games you want to watch</h2>
+                        <p class="text-gray-400 max-w-lg mx-auto">
+                            Ask about the greatest comebacks, the most heated matchups, or who the fans think is the GOAT.
+                            Get answers with links to the games.
+                        </p>
+                    </div>
+
+                    <!-- Quick prompts -->
+                    <div class="flex flex-wrap justify-center gap-2 mb-8">
+                        <button onclick="sendPrompt('What are the most exciting games to watch?')"
+                                class="text-sm bg-hoop-card border border-hoop-border rounded-full px-4 py-2 hover:border-hoop-orange/50 hover:text-hoop-orange transition-all">
+                            🔥 Most exciting games
+                        </button>
+                        <button onclick="sendPrompt('What is the greatest comeback?')"
+                                class="text-sm bg-hoop-card border border-hoop-border rounded-full px-4 py-2 hover:border-hoop-orange/50 hover:text-hoop-orange transition-all">
+                            📈 Greatest comeback
+                        </button>
+                        <button onclick="sendPrompt('Who do fans think is the best 1v1 player?')"
+                                class="text-sm bg-hoop-card border border-hoop-border rounded-full px-4 py-2 hover:border-hoop-orange/50 hover:text-hoop-orange transition-all">
+                            👑 Best player
+                        </button>
+                        <button onclick="sendPrompt('What games had the most trash talk?')"
+                                class="text-sm bg-hoop-card border border-hoop-border rounded-full px-4 py-2 hover:border-hoop-orange/50 hover:text-hoop-orange transition-all">
+                            🗣️ Best trash talk
+                        </button>
+                    </div>
+
+                    <!-- Latest Games Grid -->
+                    <h3 class="text-sm font-semibold text-gray-400 uppercase tracking-wider mb-4">Latest 1v1 Games</h3>
+                    <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
+                        {% include "partials/game_cards.html" %}
+                    </div>
+                </div>
+
+                <!-- Chat messages (hidden initially, shown after first message) -->
+                <div id="chat-messages" class="max-w-3xl mx-auto space-y-4 hidden">
+                </div>
+
+            </div>
+
+            <!-- ─────── Chat Input ─────── -->
+            <div class="flex-none border-t border-hoop-border bg-hoop-dark/80 backdrop-blur-sm px-4 py-3">
+                <form id="chat-form" onsubmit="handleSubmit(event)" class="max-w-3xl mx-auto flex gap-3">
+                    <input type="text" id="chat-input"
+                           placeholder="Ask about 1v1 basketball games..."
+                           autocomplete="off"
+                           class="flex-1 bg-hoop-card border border-hoop-border rounded-xl px-4 py-3 text-sm text-white placeholder-gray-500 focus:outline-none focus:border-hoop-orange/50 focus:ring-1 focus:ring-hoop-orange/20 transition-all" />
+                    <button type="submit" id="send-btn"
+                            class="bg-hoop-orange hover:bg-hoop-amber text-white font-medium rounded-xl px-5 py-3 text-sm transition-colors disabled:opacity-40 disabled:cursor-not-allowed">
+                        Send
+                    </button>
+                </form>
+            </div>
+        </div>
+
+        <!-- ─────── RIGHT: Source Panel (shown once chat starts) ─────── -->
+        <div id="source-panel" class="hidden w-80 xl:w-96 flex-none border-l border-hoop-border bg-hoop-dark overflow-y-auto">
+            <div class="p-4">
+                <h3 class="text-sm font-semibold text-gray-400 uppercase tracking-wider mb-3 flex items-center gap-2">
+                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                              d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1" />
+                    </svg>
+                    Sources
+                </h3>
+                <div id="source-cards" class="space-y-3">
+                    <p class="text-xs text-gray-500 italic">Sources will appear here when you ask a question.</p>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

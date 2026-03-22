@@ -37,7 +37,7 @@ log = logging.getLogger("rag-cli")
 
 BANNER = """
 ╔══════════════════════════════════════════════════╗
-║          🏀  HoopRec RAG Chat  🏀               ║
+║          🏀  RecHoop RAG Chat  🏀               ║
 ║  Ask questions about 1v1 basketball matches      ║
 ║                                                  ║
 ║  Commands:                                       ║

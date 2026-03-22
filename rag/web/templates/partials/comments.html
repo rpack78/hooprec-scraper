@@ -1,0 +1,16 @@
+<!-- partials/comments.html — Top comments for a game (loaded via htmx) -->
+{% if comments %}
+<div class="mt-2 space-y-2 border-t border-hoop-border pt-2 fade-in">
+    {% for c in comments %}
+    <div class="text-xs">
+        <span class="font-medium text-gray-300">{{ c.author or 'Anonymous' }}</span>
+        {% if c.like_count %}
+        <span class="text-gray-500 ml-1">👍 {{ c.like_count }}</span>
+        {% endif %}
+        <p class="text-gray-400 mt-0.5 leading-relaxed">{{ c.text[:200] }}{% if c.text|length > 200 %}…{% endif %}</p>
+    </div>
+    {% endfor %}
+</div>
+{% else %}
+<p class="text-xs text-gray-500 mt-2 italic">No comments available.</p>
+{% endif %}
