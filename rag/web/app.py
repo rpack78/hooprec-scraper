@@ -16,8 +16,8 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import re
-import subprocess
 import sys
 import uuid
 from pathlib import Path
@@ -315,11 +315,20 @@ async def ingest_refresh():
     async def _run_step(label: str, cmd: list[str], cwd: str | Path):
         """Run a subprocess, yield SSE progress lines."""
         yield f"event: progress\ndata: {json.dumps({'step': label, 'status': 'running'})}\n\n"
+        # Disable rich/colorful output and force UTF-8 to prevent
+        # UnicodeEncodeError when stdout is piped on Windows.
+        env = {
+            **os.environ,
+            "NO_COLOR": "1",
+            "PYTHONUNBUFFERED": "1",
+            "PYTHONUTF8": "1",
+        }
         proc = await asyncio.create_subprocess_exec(
             *cmd,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.STDOUT,
             cwd=str(cwd),
+            env=env,
         )
         async for raw_line in proc.stdout:
             line = raw_line.decode(errors="replace").rstrip()
