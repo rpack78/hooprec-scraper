@@ -281,3 +281,177 @@ def clear_google_tokens():
         conn.commit()
     finally:
         conn.close()
+
+
+# ── Video Discovery (Phase 4.1) ──────────────────────────────
+
+def video_exists(video_id: str) -> bool:
+    """Return True if a video_id is already in youtube_videos."""
+    conn = _connect()
+    try:
+        row = conn.execute(
+            "SELECT 1 FROM youtube_videos WHERE video_id = ?", (video_id,)
+        ).fetchone()
+        return row is not None
+    finally:
+        conn.close()
+
+
+def get_match_by_video_id(video_id: str) -> dict | None:
+    """Return match + YouTube metadata for a known video, or None."""
+    conn = _connect()
+    try:
+        row = conn.execute(
+            """
+            SELECT
+                m.player1_name, m.player2_name,
+                m.player1_score, m.player2_score,
+                m.winner_name, m.match_date,
+                m.youtube_video_id AS video_id,
+                yv.title, yv.channel_name, yv.view_count
+            FROM matches m
+            JOIN youtube_videos yv ON yv.video_id = m.youtube_video_id
+            WHERE m.youtube_video_id = ?
+            """,
+            (video_id,),
+        ).fetchone()
+        return dict(row) if row else None
+    finally:
+        conn.close()
+
+
+def create_match_from_discovery(
+    video_id: str,
+    player1_name: str,
+    player2_name: str,
+    player1_score: int | None,
+    player2_score: int | None,
+    match_date: str | None,
+) -> int:
+    """Insert a new match row from a discovered video. Returns the row id.
+
+    Also inserts/updates player rows and player_matches, adjusting
+    win/loss counters.
+    """
+    import re as _re
+    from datetime import datetime as _dt
+
+    # Build match_id slug: match-{p1}-vs-{p2}-{m-d-yyyy}
+    def _slugify(name: str) -> str:
+        return _re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-")
+
+    date_part = ""
+    if match_date:
+        try:
+            d = _dt.strptime(match_date, "%Y-%m-%d")
+            date_part = f"{d.month}-{d.day}-{d.year}"
+        except ValueError:
+            date_part = _re.sub(r"[^0-9\-]", "", match_date)
+
+    match_id = f"match-{_slugify(player1_name)}-vs-{_slugify(player2_name)}-{date_part}"
+
+    # Determine winner/loser
+    winner_name = None
+    loser_name = None
+    if player1_score is not None and player2_score is not None:
+        if player1_score > player2_score:
+            winner_name = player1_name
+            loser_name = player2_name
+        elif player2_score > player1_score:
+            winner_name = player2_name
+            loser_name = player1_name
+
+    conn = _connect()
+    try:
+        # Insert match
+        conn.execute(
+            """
+            INSERT INTO matches
+                (match_id, detail_url, player1_name, player2_name,
+                 player1_score, player2_score, winner_name, loser_name,
+                 youtube_url, youtube_video_id, match_date, scraped_at)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,datetime('now'))
+            ON CONFLICT(match_id) DO UPDATE SET
+                player1_score = excluded.player1_score,
+                player2_score = excluded.player2_score,
+                winner_name   = excluded.winner_name,
+                loser_name    = excluded.loser_name,
+                match_date    = excluded.match_date
+            """,
+            (
+                match_id,
+                f"https://www.youtube.com/watch?v={video_id}",
+                player1_name,
+                player2_name,
+                player1_score,
+                player2_score,
+                winner_name,
+                loser_name,
+                f"https://www.youtube.com/watch?v={video_id}",
+                video_id,
+                match_date,
+            ),
+        )
+        conn.commit()
+
+        match_row_id = conn.execute(
+            "SELECT id FROM matches WHERE match_id = ?", (match_id,)
+        ).fetchone()["id"]
+
+        # Link youtube_videos.match_id
+        conn.execute(
+            "UPDATE youtube_videos SET match_id = ? WHERE video_id = ?",
+            (match_row_id, video_id),
+        )
+        conn.commit()
+
+        # Upsert players and player_matches, update win/loss counters
+        _link_players(conn, match_row_id, player1_name, player2_name,
+                      player1_score, player2_score, winner_name, loser_name)
+
+        return match_row_id
+    finally:
+        conn.close()
+
+
+def _link_players(
+    conn: sqlite3.Connection,
+    match_row_id: int,
+    player1_name: str,
+    player2_name: str,
+    player1_score: int | None,
+    player2_score: int | None,
+    winner_name: str | None,
+    loser_name: str | None,
+) -> None:
+    """Populate player_matches join table and update win/loss counters."""
+    pairs = []
+    if player1_name:
+        r = "win" if winner_name == player1_name else (
+            "loss" if loser_name == player1_name else "unknown")
+        pairs.append((player1_name, r, player1_score))
+    if player2_name:
+        r = "win" if winner_name == player2_name else (
+            "loss" if loser_name == player2_name else "unknown")
+        pairs.append((player2_name, r, player2_score))
+
+    for name, result, score in pairs:
+        row = conn.execute("SELECT id FROM players WHERE name = ?", (name,)).fetchone()
+        if not row:
+            conn.execute("INSERT OR IGNORE INTO players (name) VALUES (?)", (name,))
+            conn.commit()
+            row = conn.execute("SELECT id FROM players WHERE name = ?", (name,)).fetchone()
+        pid = row["id"]
+
+        conn.execute(
+            "INSERT OR REPLACE INTO player_matches (player_id, match_id, result, score) VALUES (?,?,?,?)",
+            (pid, match_row_id, result, score),
+        )
+    conn.commit()
+
+    for name, result, _ in pairs:
+        if result == "win":
+            conn.execute("UPDATE players SET wins = wins + 1 WHERE name = ?", (name,))
+        elif result == "loss":
+            conn.execute("UPDATE players SET losses = losses + 1 WHERE name = ?", (name,))
+    conn.commit()

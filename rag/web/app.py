@@ -39,6 +39,9 @@ from rag.web.db import (
     save_google_tokens,
     get_google_tokens,
     clear_google_tokens,
+    video_exists,
+    get_match_by_video_id,
+    create_match_from_discovery,
 )
 
 logging.basicConfig(
@@ -830,6 +833,345 @@ async def ingest_refresh():
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
+
+
+# ---------------------------------------------------------------------------
+# Video Discovery (Phase 4.1)
+# ---------------------------------------------------------------------------
+
+_YT_ID_PATTERNS = [
+    re.compile(r"(?:youtube\.com/watch\?v=|youtu\.be/)([A-Za-z0-9_\-]{11})"),
+    re.compile(r"youtube\.com/embed/([A-Za-z0-9_\-]{11})"),
+]
+
+
+def _extract_video_ids_from_text(text: str) -> list[str]:
+    """Parse all YouTube video IDs from raw text, deduplicated, order-preserved."""
+    seen: set[str] = set()
+    result: list[str] = []
+    for pat in _YT_ID_PATTERNS:
+        for m in pat.finditer(text):
+            vid = m.group(1)
+            if vid not in seen:
+                seen.add(vid)
+                result.append(vid)
+    return result
+
+
+_VS_PATTERN = re.compile(
+    r"(?P<p1>.+?)\s+vs?\.?\s+(?P<p2>.+)",
+    re.IGNORECASE,
+)
+_SCORE_PATTERN = re.compile(r"(\d{1,3})\s*[-–]\s*(\d{1,3})")
+
+_EXTRACT_PROMPT = """\
+You are analysing a 1v1 basketball game video. Extract the following fields as JSON:
+{"player1": "...", "player2": "...", "player1_score": <int or null>, "player2_score": <int or null>, "match_date": "YYYY-MM-DD or null"}
+
+Rules:
+- player1 and player2 are the two individual players competing.
+- Scores are final game scores (integers). Use null if you can't determine them.
+- match_date should be in YYYY-MM-DD format. Use null if unknown.
+- Return ONLY valid JSON, no commentary.
+
+Video title: {title}
+
+Transcript excerpt (first ~500 words):
+{transcript}
+"""
+
+
+def _guess_match_info(title: str, transcript: str | None) -> dict:
+    """Try regex on title, fall back to LLM if needed."""
+    info = {"player1": None, "player2": None,
+            "player1_score": None, "player2_score": None,
+            "match_date": None, "flagged": False}
+
+    # Regex pass on title
+    vs_match = _VS_PATTERN.search(title)
+    if vs_match:
+        info["player1"] = vs_match.group("p1").strip()
+        info["player2"] = vs_match.group("p2").strip()
+
+    score_match = _SCORE_PATTERN.search(title)
+    if score_match:
+        info["player1_score"] = int(score_match.group(1))
+        info["player2_score"] = int(score_match.group(2))
+
+    # If we got both players from regex, we're good
+    if info["player1"] and info["player2"]:
+        return info
+
+    # LLM fallback
+    try:
+        import ollama as ollama_lib
+        excerpt = " ".join((transcript or "").split()[:500])
+        resp = ollama_lib.chat(
+            model=os.getenv("OLLAMA_MODEL", "llama3.1:8b"),
+            messages=[{"role": "user", "content": _EXTRACT_PROMPT.format(
+                title=title, transcript=excerpt)}],
+            options={"num_ctx": 4096},
+        )
+        import json as _json
+        raw = resp.message.content.strip()
+        # Find first { ... } in response
+        start = raw.find("{")
+        end = raw.rfind("}") + 1
+        if start >= 0 and end > start:
+            data = _json.loads(raw[start:end])
+            info["player1"] = data.get("player1") or info["player1"]
+            info["player2"] = data.get("player2") or info["player2"]
+            if data.get("player1_score") is not None:
+                info["player1_score"] = int(data["player1_score"])
+            if data.get("player2_score") is not None:
+                info["player2_score"] = int(data["player2_score"])
+            info["match_date"] = data.get("match_date") or info["match_date"]
+    except Exception as exc:
+        log.warning("LLM extraction failed: %s", exc)
+
+    # Flag if we still can't identify two players
+    if not info["player1"] or not info["player2"]:
+        info["flagged"] = True
+
+    return info
+
+
+@app.get("/discover", response_class=HTMLResponse)
+async def discover_page(request: Request):
+    return templates.TemplateResponse("discover.html", {"request": request})
+
+
+@app.post("/api/discover/check")
+async def discover_check(request: Request):
+    """Check which video IDs are already in the database."""
+    body = await request.json()
+    raw_text = body.get("urls", "")
+    video_ids = _extract_video_ids_from_text(raw_text)
+
+    if not video_ids:
+        return {"known": [], "unknown": [], "invalid": True}
+
+    known = []
+    unknown = []
+    for vid in video_ids:
+        match_info = get_match_by_video_id(vid)
+        if match_info:
+            known.append({**match_info, "thumbnail_url": f"https://img.youtube.com/vi/{vid}/hqdefault.jpg"})
+        else:
+            unknown.append(vid)
+
+    return {"known": known, "unknown": unknown, "invalid": False}
+
+
+@app.post("/api/discover/process")
+async def discover_process(request: Request):
+    """Process unknown videos: fetch metadata, transcript, comments.
+    Returns SSE stream with progress and guessed match info."""
+    body = await request.json()
+    video_ids = body.get("video_ids", [])
+
+    if not video_ids:
+        return Response(status_code=400, content="No video IDs provided")
+
+    async def event_stream():
+        # Import youtube_ingest functions
+        import sys as _sys
+        from pathlib import Path as _Path
+        yt_ingest_dir = _Path(__file__).parent.parent.parent / "youtube-ingest"
+        if str(yt_ingest_dir) not in _sys.path:
+            _sys.path.insert(0, str(yt_ingest_dir))
+
+        from youtube_ingest import (
+            init_db,
+            fetch_video_metadata_batch,
+            fetch_transcript,
+            clean_transcript,
+            fetch_top_comments,
+            upsert_video,
+            upsert_transcript,
+            insert_comments,
+            _build_youtube_service,
+            set_progress,
+            YOUTUBE_API_KEY,
+        )
+
+        conn = init_db()
+        service = _build_youtube_service() if YOUTUBE_API_KEY else None
+
+        results = []
+
+        for vid in video_ids:
+            try:
+                yield f"event: progress\ndata: {json.dumps({'video_id': vid, 'status': 'processing', 'message': 'Fetching metadata...'})}\n\n"
+                await asyncio.sleep(0)  # yield control
+
+                # 1. Metadata
+                meta = {}
+                if service:
+                    meta_batch = fetch_video_metadata_batch(service, [vid])
+                    meta = meta_batch.get(vid, {})
+
+                if not meta:
+                    yield f"event: progress\ndata: {json.dumps({'video_id': vid, 'status': 'error', 'message': 'Video not found or private'})}\n\n"
+                    continue
+
+                # Store in DB (match_id=None for now, will be set on submit)
+                upsert_video(conn, None, vid, meta)
+
+                yield f"event: progress\ndata: {json.dumps({'video_id': vid, 'status': 'processing', 'message': 'Fetching transcript...'})}\n\n"
+                await asyncio.sleep(0)
+
+                # 2. Transcript
+                raw_text, segments = fetch_transcript(vid)
+                cleaned_text = None
+                if raw_text:
+                    yield f"event: progress\ndata: {json.dumps({'video_id': vid, 'status': 'processing', 'message': 'Cleaning transcript with Ollama...'})}\n\n"
+                    await asyncio.sleep(0)
+                    cleaned_text = await asyncio.to_thread(clean_transcript, raw_text)
+
+                upsert_transcript(conn, vid, raw_text, cleaned_text, segments)
+
+                yield f"event: progress\ndata: {json.dumps({'video_id': vid, 'status': 'processing', 'message': 'Fetching comments...'})}\n\n"
+                await asyncio.sleep(0)
+
+                # 3. Comments
+                comments = fetch_top_comments(service, vid) if service else []
+                insert_comments(conn, vid, comments)
+
+                # 4. Checkpoint
+                from datetime import datetime, timezone
+                set_progress(conn, f"yt_video:{vid}", datetime.now(timezone.utc).isoformat())
+
+                # 5. Guess match info
+                title = meta.get("title", "")
+                guessed = await asyncio.to_thread(_guess_match_info, title, cleaned_text or raw_text)
+
+                result = {
+                    "video_id": vid,
+                    "title": title,
+                    "channel": meta.get("channel_name", ""),
+                    "view_count": meta.get("view_count", 0),
+                    "duration_sec": meta.get("duration_sec", 0),
+                    "thumbnail_url": f"https://img.youtube.com/vi/{vid}/hqdefault.jpg",
+                    "player1": guessed.get("player1", ""),
+                    "player2": guessed.get("player2", ""),
+                    "player1_score": guessed.get("player1_score"),
+                    "player2_score": guessed.get("player2_score"),
+                    "match_date": guessed.get("match_date", ""),
+                    "flagged": guessed.get("flagged", False),
+                }
+                results.append(result)
+
+                yield f"event: progress\ndata: {json.dumps({'video_id': vid, 'status': 'done', 'message': 'Ready for review'})}\n\n"
+
+            except Exception as exc:
+                log.exception("Error processing video %s", vid)
+                yield f"event: progress\ndata: {json.dumps({'video_id': vid, 'status': 'error', 'message': str(exc)})}\n\n"
+
+        # Final event with all results
+        yield f"event: results\ndata: {json.dumps(results)}\n\n"
+        yield "event: done\ndata: {}\n\n"
+        conn.close()
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+@app.post("/api/discover/submit")
+async def discover_submit(request: Request):
+    """Submit user-corrected match data for a discovered video."""
+    body = await request.json()
+    vid = body.get("video_id", "").strip()
+    player1 = body.get("player1_name", "").strip()
+    player2 = body.get("player2_name", "").strip()
+    p1_score = body.get("player1_score")
+    p2_score = body.get("player2_score")
+    match_date = body.get("match_date", "").strip() or None
+
+    if not vid or not player1 or not player2:
+        return Response(status_code=400, content="video_id, player1_name, and player2_name are required")
+
+    # Convert scores to int or None
+    try:
+        p1_score = int(p1_score) if p1_score not in (None, "", "null") else None
+    except (ValueError, TypeError):
+        p1_score = None
+    try:
+        p2_score = int(p2_score) if p2_score not in (None, "", "null") else None
+    except (ValueError, TypeError):
+        p2_score = None
+
+    # 1. Create match + players + win/loss
+    match_row_id = create_match_from_discovery(
+        video_id=vid,
+        player1_name=player1,
+        player2_name=player2,
+        player1_score=p1_score,
+        player2_score=p2_score,
+        match_date=match_date,
+    )
+
+    # 2. Write markdown file
+    import sys as _sys
+    from pathlib import Path as _Path
+    yt_ingest_dir = _Path(__file__).parent.parent.parent / "youtube-ingest"
+    if str(yt_ingest_dir) not in _sys.path:
+        _sys.path.insert(0, str(yt_ingest_dir))
+
+    from youtube_ingest import write_markdown
+    from rag.config import DB_PATH
+    import sqlite3
+
+    conn = sqlite3.connect(str(DB_PATH))
+    conn.row_factory = sqlite3.Row
+
+    # Get metadata + transcript + comments from DB
+    meta_row = conn.execute(
+        "SELECT title, channel_name, view_count, like_count, duration_sec, published_at "
+        "FROM youtube_videos WHERE video_id = ?", (vid,)
+    ).fetchone()
+    meta = dict(meta_row) if meta_row else {}
+
+    trans_row = conn.execute(
+        "SELECT cleaned_text FROM youtube_transcripts WHERE video_id = ?", (vid,)
+    ).fetchone()
+    cleaned_text = trans_row["cleaned_text"] if trans_row else None
+
+    comment_rows = conn.execute(
+        "SELECT comment_id, author, text, like_count, published_at "
+        "FROM youtube_comments WHERE video_id = ? ORDER BY like_count DESC LIMIT 20", (vid,)
+    ).fetchall()
+    comments = [dict(r) for r in comment_rows]
+    conn.close()
+
+    match_info = {
+        "match_id": f"match-{vid}",
+        "player1_name": player1,
+        "player2_name": player2,
+        "match_date": match_date or "unknown",
+    }
+
+    md_path = write_markdown(vid, match_info, meta, cleaned_text, comments)
+
+    # 3. Auto-ingest into ChromaDB
+    node_count = 0
+    try:
+        from rag.ingest import ingest_single_markdown
+        node_count = await asyncio.to_thread(ingest_single_markdown, md_path)
+    except Exception as exc:
+        log.warning("ChromaDB ingest failed for %s: %s", vid, exc)
+
+    return {
+        "status": "ok",
+        "match_row_id": match_row_id,
+        "markdown_path": str(md_path),
+        "chroma_nodes": node_count,
+        "player1": player1,
+        "player2": player2,
+    }
 
 
 # ---------------------------------------------------------------------------

@@ -250,6 +250,62 @@ def run_ingest(reset: bool = False) -> None:
     log.info("Done. ChromaDB collection '%s' now has %d chunks.", CHROMA_COLLECTION, final_count)
 
 
+def ingest_single_markdown(path: Path) -> int:
+    """Parse one YouTube markdown file, chunk, embed, and add to ChromaDB.
+
+    Returns the number of nodes added.
+    """
+    CHROMA_DIR.mkdir(parents=True, exist_ok=True)
+    chroma_client = chromadb.PersistentClient(path=str(CHROMA_DIR))
+    collection = chroma_client.get_or_create_collection(CHROMA_COLLECTION)
+
+    parsed = parse_youtube_md(path)
+    meta = parsed["metadata"]
+    docs: list[Document] = []
+
+    if parsed["transcript"]:
+        docs.append(Document(
+            text=parsed["transcript"],
+            metadata={**meta, "section": "transcript"},
+            excluded_llm_metadata_keys=["source_file", "section"],
+            excluded_embed_metadata_keys=["source_file"],
+        ))
+    if parsed["comments"]:
+        docs.append(Document(
+            text=parsed["comments"],
+            metadata={**meta, "section": "comments"},
+            excluded_llm_metadata_keys=["source_file", "section"],
+            excluded_embed_metadata_keys=["source_file"],
+        ))
+
+    if not docs:
+        log.warning("No content to ingest from %s", path)
+        return 0
+
+    embed_model = OllamaEmbedding(model_name=EMBED_MODEL)
+    splitter = SentenceSplitter(chunk_size=CHUNK_SIZE, chunk_overlap=CHUNK_OVERLAP)
+
+    transcript_docs = [d for d in docs if d.metadata.get("section") == "transcript"]
+    comment_docs = [d for d in docs if d.metadata.get("section") == "comments"]
+
+    transcript_nodes = splitter.get_nodes_from_documents(transcript_docs) if transcript_docs else []
+    comment_nodes = splitter.get_nodes_from_documents(comment_docs) if comment_docs else []
+    all_nodes = transcript_nodes + comment_nodes
+
+    vector_store = ChromaVectorStore(chroma_collection=collection)
+    storage_context = StorageContext.from_defaults(vector_store=vector_store)
+
+    VectorStoreIndex(
+        nodes=all_nodes,
+        storage_context=storage_context,
+        embed_model=embed_model,
+        show_progress=False,
+    )
+
+    log.info("Ingested %d nodes from %s into ChromaDB", len(all_nodes), path.name)
+    return len(all_nodes)
+
+
 # ---------------------------------------------------------------------------
 # CLI entry point
 # ---------------------------------------------------------------------------
