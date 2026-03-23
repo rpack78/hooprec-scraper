@@ -415,9 +415,51 @@ async def chat(request: Request):
                 has_list = bool(_LIST_KEYWORDS.search(message))
 
                 if has_list and players:
-                    # "Show me all games with X in chronological order" → SQL
-                    engine = _sql_engine
+                    # "Show me all games with X" → direct DB query, skip LLM
                     route_label = "sql (full list)"
+                    note = f"⚡ {route_label}"
+                    yield f"event: route\ndata: {json.dumps(note)}\n\n"
+
+                    from rag.web.db import get_player_games
+                    db_games = get_player_games(players, limit=50)
+                    player_label = " & ".join(players)
+                    if not db_games:
+                        text = f"No games found for {player_label}."
+                    else:
+                        lines = [f"Found **{len(db_games)} games** for {player_label}:\n"]
+                        for g in db_games:
+                            p1, p2 = g.get("player1_name", ""), g.get("player2_name", "")
+                            s1, s2 = g.get("player1_score", ""), g.get("player2_score", "")
+                            w = g.get("winner_name", "")
+                            d = g.get("match_date", "")
+                            winner_tag = f" — **{w} wins**" if w else ""
+                            lines.append(f"- **{p1}** {s1}–{s2} **{p2}** ({d}){winner_tag}")
+                        text = "\n".join(lines)
+
+                    for i in range(0, len(text), 20):
+                        chunk = text[i : i + 20]
+                        yield f"event: token\ndata: {json.dumps(chunk)}\n\n"
+                        await asyncio.sleep(0.01)
+
+                    cards = []
+                    for g in db_games:
+                        vid = g.get("video_id", "")
+                        cards.append({
+                            "player1": g.get("player1_name", ""),
+                            "player2": g.get("player2_name", ""),
+                            "youtube_url": g.get("youtube_url", ""),
+                            "video_id": vid,
+                            "thumbnail_url": f"https://img.youtube.com/vi/{vid}/hqdefault.jpg" if vid else "",
+                            "match_date": g.get("match_date", ""),
+                            "channel": g.get("channel_name", ""),
+                            "views": g.get("view_count"),
+                            "score": 0,
+                            "summary": g.get("title", ""),
+                        })
+                    yield f"event: sources\ndata: {json.dumps(cards)}\n\n"
+                    yield "event: done\ndata: {}\n\n"
+                    return
+
                 elif players and has_stats:
                     # Both player names AND stats keywords → try SQL first
                     engine = _sql_engine
@@ -876,8 +918,7 @@ def _extract_video_ids_from_text(text: str) -> list[str]:
 
 
 _VS_PATTERN = re.compile(
-    r"(?P<p1>.+?)\s+vs?\.?\s+(?P<p2>.+)",
-    re.IGNORECASE,
+    r"(?:^|[|…\s])(?P<p1>[A-Z][\w'.\-]*(?: (?:aka |AKA )?[A-Z][\w'.\-]*){0,4})\s+vs?\.?\s+(?P<p2>[A-Z][\w'.\-]*(?: (?:aka |AKA )?[A-Z][\w'.\-]*){0,4})",
 )
 _SCORE_PATTERN = re.compile(r"(\d{1,3})\s*[-–]\s*(\d{1,3})")
 
@@ -898,7 +939,7 @@ Transcript excerpt (first ~500 words):
 """
 
 
-def _guess_match_info(title: str, transcript: str | None) -> dict:
+def _guess_match_info(title: str, transcript: str | None, published_at: str | None = None) -> dict:
     """Try regex on title, fall back to LLM if needed."""
     info = {"player1": None, "player2": None,
             "player1_score": None, "player2_score": None,
@@ -945,6 +986,11 @@ def _guess_match_info(title: str, transcript: str | None) -> dict:
             info["match_date"] = data.get("match_date") or info["match_date"]
     except Exception as exc:
         log.warning("LLM extraction failed: %s", exc)
+
+    # Fallback: use YouTube publish date if match_date is still empty
+    if not info["match_date"] and published_at:
+        # published_at is typically ISO format like "2024-03-15T12:00:00Z"
+        info["match_date"] = published_at[:10]
 
     # Flag if we still can't identify two players
     if not info["player1"] or not info["player2"]:
@@ -1063,7 +1109,8 @@ async def discover_process(request: Request):
 
                 # 5. Guess match info
                 title = meta.get("title", "")
-                guessed = await asyncio.to_thread(_guess_match_info, title, cleaned_text or raw_text)
+                published_at = meta.get("published_at", "")
+                guessed = await asyncio.to_thread(_guess_match_info, title, cleaned_text or raw_text, published_at)
 
                 result = {
                     "video_id": vid,
