@@ -45,7 +45,7 @@ TOP_K = int(os.getenv("RAG_TOP_K", "5"))
 # ---------------------------------------------------------------------------
 # LLM parameters
 # ---------------------------------------------------------------------------
-REQUEST_TIMEOUT = float(os.getenv("RAG_LLM_TIMEOUT", "120.0"))
+REQUEST_TIMEOUT = float(os.getenv("RAG_LLM_TIMEOUT", "300.0"))
 CONTEXT_WINDOW = int(os.getenv("RAG_CONTEXT_WINDOW", "8192"))
 
 # ---------------------------------------------------------------------------

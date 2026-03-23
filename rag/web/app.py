@@ -314,7 +314,21 @@ async def _preload_suggested():
 @app.on_event("startup")
 async def on_startup():
     ensure_web_tables()
+    # Warm up Ollama so the model is loaded into VRAM before any user query
+    asyncio.create_task(_warmup_ollama())
     asyncio.create_task(_preload_suggested())
+
+
+async def _warmup_ollama():
+    """Send a tiny prompt to Ollama so the model is loaded and ready."""
+    try:
+        _init_engines()
+        from rag.query_engine import get_llm
+        llm = get_llm()
+        await asyncio.to_thread(llm.complete, "hi")
+        log.warning("Ollama warmup complete — model loaded")
+    except Exception:
+        log.warning("Ollama warmup failed — first query may be slow")
 
 
 @app.get("/api/channel-icon/{channel_name}")
@@ -469,7 +483,10 @@ async def chat(request: Request):
 
         except Exception as exc:
             log.exception("Chat stream error")
-            yield f"event: error\ndata: {json.dumps(str(exc))}\n\n"
+            msg = str(exc)
+            if "timed out" in msg.lower() or "ReadTimeout" in msg:
+                msg = "The AI model took too long to respond. Please try again — it should be faster now that the model is loaded."
+            yield f"event: error\ndata: {json.dumps(msg)}\n\n"
 
     return StreamingResponse(
         event_stream(),
@@ -946,6 +963,8 @@ async def discover_check(request: Request):
     """Check which video IDs are already in the database."""
     body = await request.json()
     raw_text = body.get("urls", "")
+    if isinstance(raw_text, list):
+        raw_text = "\n".join(str(u) for u in raw_text)
     video_ids = _extract_video_ids_from_text(raw_text)
 
     if not video_ids:
