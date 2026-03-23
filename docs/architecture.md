@@ -77,6 +77,8 @@ flowchart TB
 | `youtube_videos` | 572 | Video metadata (title, views, likes, duration, channel) |
 | `youtube_transcripts` | 572 | Raw + Ollama-cleaned transcripts with timestamped segments |
 | `youtube_comments` | 11,038 | Top comments per video (up to 20 each, sorted by relevance) |
+| `watch_history` | variable | User watch tracking with dates (Phase 4) |
+| `google_auth` | 0–1 | Single-user Google OAuth tokens for YouTube commenting (Phase 4) |
 
 ## Vector Store
 
@@ -111,7 +113,7 @@ hooprec-scraper/
 │   └── requirements.txt
 ├── rag/                           # RAG chat interface
 │   ├── __init__.py
-│   ├── ingest.py
+│   ├── ingest.py                  # ChromaDB ingestion (batch + single-file)
 │   ├── query_engine.py
 │   ├── cli.py
 │   ├── config.py
@@ -119,10 +121,16 @@ hooprec-scraper/
 │   ├── tests/
 │   │   └── test_ingest.py
 │   └── web/
-│       ├── app.py
-│       ├── db.py
+│       ├── app.py                 # FastAPI routes inc. chat, watch, OAuth, discover
+│       ├── db.py                  # SQLite queries inc. discovery + player linking
 │       ├── templates/
+│       │   ├── base.html
+│       │   ├── index.html
+│       │   ├── discover.html          # Video Discovery page (Phase 4.1)
+│       │   └── partials/
 │       └── static/
+│           ├── app.js
+│           └── discover.js            # Video discovery JS
 ├── docs/                          # Documentation
 └── README.md
 ```

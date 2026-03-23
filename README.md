@@ -16,7 +16,7 @@ The goal: **ask natural-language questions about 1v1 basketball** and get answer
 | [HoopRec Scraper](docs/hooprec-scraper.md) | Match data ingestion from hooprec.com (daily scheduled) |
 | [YouTube Ingest](docs/youtube-ingest.md) | Video metadata, transcripts, comments enrichment |
 | [RAG Engine](docs/rag-engine.md) | LlamaIndex + ChromaDB hybrid retrieval, CLI, tests, model selection |
-| [Web UI](docs/web-ui.md) | Browser-based chat with game discovery and streaming |
+| [Web UI](docs/web-ui.md) | Browser-based chat with game discovery, watch tracking, video player, and YouTube commenting |
 
 ## Quick Start
 
@@ -42,6 +42,7 @@ cd ..
 python -m rag.ingest              # embed YouTube markdown into ChromaDB
 python -m rag.cli                 # interactive CLI
 python -m rag.web.app             # web UI at localhost:8000
+                                  # Discover page at localhost:8000/discover
 ```
 
 ## Tech Stack
