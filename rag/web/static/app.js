@@ -2,7 +2,8 @@
  * app.js — Client-side logic for RecHoop Chat.
  *
  * Handles SSE streaming, chat UI state transitions, mode switching,
- * and source card rendering.
+ * source card rendering, watch tracking, embedded video player,
+ * Google OAuth, and YouTube commenting.
  */
 
 // ---------------------------------------------------------------------------
@@ -11,6 +12,78 @@
 let isStreaming = false;
 let chatStarted = false;
 let streamingRawText = '';  // accumulates raw text during streaming
+let watchedVideos = {};     // video_id -> watched_at date string
+let isSignedIn = false;
+
+// Load watched state and auth status on page load
+document.addEventListener('DOMContentLoaded', () => {
+    loadWatchedState();
+    checkAuthStatus();
+    window.addEventListener('message', (e) => {
+        if (e.data && e.data.type === 'oauth_complete') {
+            checkAuthStatus();
+        }
+    });
+});
+
+function loadWatchedState() {
+    fetch('/api/watch')
+        .then(r => r.json())
+        .then(data => {
+            watchedVideos = data;
+            applyWatchedBadges();
+        })
+        .catch(() => {});
+}
+
+function applyWatchedBadges() {
+    document.querySelectorAll('[data-video-id]').forEach(card => {
+        const vid = card.dataset.videoId;
+        const indicator = card.querySelector('.watched-indicator');
+        const btn = card.querySelector('.watch-btn');
+        if (watchedVideos[vid]) {
+            if (indicator) {
+                indicator.classList.remove('hidden');
+                indicator.innerHTML = `<span class="watched-badge">✓ Watched ${watchedVideos[vid]}</span>`;
+            }
+            if (btn) {
+                btn.textContent = '✓ Watched';
+                btn.classList.add('text-green-400');
+                btn.classList.remove('text-gray-400');
+            }
+        } else {
+            if (indicator) {
+                indicator.classList.add('hidden');
+                indicator.innerHTML = '';
+            }
+            if (btn) {
+                btn.textContent = '👁️ Mark watched';
+                btn.classList.remove('text-green-400');
+                btn.classList.add('text-gray-400');
+            }
+        }
+    });
+}
+
+function toggleWatched(videoId, btnEl) {
+    if (watchedVideos[videoId]) {
+        // Unmark
+        fetch(`/api/watch/${encodeURIComponent(videoId)}`, { method: 'DELETE' })
+            .then(r => r.json())
+            .then(() => {
+                delete watchedVideos[videoId];
+                applyWatchedBadges();
+            });
+    } else {
+        // Mark watched
+        fetch(`/api/watch/${encodeURIComponent(videoId)}`, { method: 'POST' })
+            .then(r => r.json())
+            .then(data => {
+                watchedVideos[videoId] = data.watched_at;
+                applyWatchedBadges();
+            });
+    }
+}
 
 // ---------------------------------------------------------------------------
 // Chat submission
@@ -221,19 +294,25 @@ function renderSourceCards(cards, container) {
         return;
     }
 
-    container.innerHTML = cards.map(card => `
-        <div class="bg-hoop-card rounded-lg overflow-hidden border border-hoop-border hover:border-hoop-orange/40 transition-all fade-in">
+    container.innerHTML = cards.map(card => {
+        const isWatched = watchedVideos[card.video_id];
+        return `
+        <div class="bg-hoop-card rounded-lg overflow-hidden border border-hoop-border hover:border-hoop-orange/40 transition-all fade-in" data-video-id="${escapeAttr(card.video_id)}">
             ${card.thumbnail_url ? `
-                <a href="${escapeAttr(card.youtube_url)}" target="_blank" rel="noopener">
+                <div class="relative cursor-pointer" onclick="playVideo('${escapeAttr(card.video_id)}')">
                     <img src="${escapeAttr(card.thumbnail_url)}" alt="${escapeAttr(card.player1)} vs ${escapeAttr(card.player2)}"
                          class="w-full aspect-video object-cover hover:brightness-110 transition-all" loading="lazy" />
-                </a>
+                    <div class="absolute inset-0 flex items-center justify-center opacity-0 hover:opacity-100 transition-opacity bg-black/30">
+                        <svg class="w-10 h-10 text-white/90" fill="currentColor" viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>
+                    </div>
+                    ${isWatched ? `<span class="absolute top-1.5 left-1.5"><span class="watched-badge">✓ Watched ${escapeHtml(isWatched)}</span></span>` : ''}
+                </div>
             ` : ''}
             <div class="p-3 space-y-1.5">
                 <div class="flex items-center justify-between">
-                    <a href="${escapeAttr(card.youtube_url)}" target="_blank" rel="noopener" class="text-sm font-bold hover:text-hoop-orange transition-colors">
+                    <span class="text-sm font-bold cursor-pointer hover:text-hoop-orange transition-colors" onclick="playVideo('${escapeAttr(card.video_id)}')">
                         ${escapeHtml(card.player1)} <span class="text-gray-500">vs</span> ${escapeHtml(card.player2)}
-                    </a>
+                    </span>
                     ${card.score ? `
                         <span class="text-xs bg-hoop-orange/20 text-hoop-orange px-1.5 py-0.5 rounded font-mono">
                             ${Math.round(card.score * 100)}%
@@ -251,9 +330,15 @@ function renderSourceCards(cards, container) {
                     ${card.views ? `<span>${Number(card.views).toLocaleString()} views</span>` : ''}
                 </div>
                 ${card.summary ? `<p class="text-xs text-gray-300 leading-relaxed line-clamp-2">${escapeHtml(card.summary)}</p>` : ''}
+                <button class="watch-btn text-xs transition-colors ${isWatched ? 'text-green-400' : 'text-gray-400'}"
+                        data-video-id="${escapeAttr(card.video_id)}"
+                        onclick="toggleWatched('${escapeAttr(card.video_id)}', this)">
+                    ${isWatched ? '✓ Watched' : '👁️ Mark watched'}
+                </button>
             </div>
         </div>
-    `).join('');
+        `;
+    }).join('');
 }
 
 // ---------------------------------------------------------------------------
@@ -545,4 +630,167 @@ function finishRefresh(success) {
 
 function closeRefreshPanel() {
     document.getElementById('refresh-panel').classList.add('hidden');
+}
+
+// ---------------------------------------------------------------------------
+// Embedded YouTube player
+// ---------------------------------------------------------------------------
+
+function playVideo(videoId) {
+    if (!videoId) return;
+    const modal = document.getElementById('video-modal');
+    const iframe = document.getElementById('video-iframe');
+    iframe.src = `https://www.youtube.com/embed/${encodeURIComponent(videoId)}?autoplay=1&rel=0`;
+    modal.classList.remove('hidden');
+
+    // Auto-mark as watched when playing
+    if (!watchedVideos[videoId]) {
+        fetch(`/api/watch/${encodeURIComponent(videoId)}`, { method: 'POST' })
+            .then(r => r.json())
+            .then(data => {
+                watchedVideos[videoId] = data.watched_at;
+                applyWatchedBadges();
+            })
+            .catch(() => {});
+    }
+}
+
+function closeVideoModal(event) {
+    // If event is provided, only close when clicking backdrop (not content)
+    if (event && event.target !== document.getElementById('video-modal')) return;
+    const modal = document.getElementById('video-modal');
+    const iframe = document.getElementById('video-iframe');
+    modal.classList.add('hidden');
+    iframe.src = '';  // Stop playback
+}
+
+// Escape key closes modal
+document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') {
+        const modal = document.getElementById('video-modal');
+        if (modal && !modal.classList.contains('hidden')) {
+            closeVideoModal();
+        }
+    }
+});
+
+// ---------------------------------------------------------------------------
+// Google OAuth
+// ---------------------------------------------------------------------------
+
+function checkAuthStatus() {
+    fetch('/api/auth/status')
+        .then(r => r.json())
+        .then(data => {
+            isSignedIn = data.signed_in;
+            const label = document.getElementById('auth-label');
+            const btn = document.getElementById('auth-btn');
+            if (data.signed_in) {
+                label.textContent = data.email || 'Signed In';
+                btn.title = 'Click to sign out';
+                btn.classList.add('text-green-400');
+                btn.classList.remove('text-gray-400');
+            } else {
+                label.textContent = 'Sign In';
+                btn.title = 'Sign in with Google to comment on YouTube videos';
+                btn.classList.remove('text-green-400');
+                btn.classList.add('text-gray-400');
+            }
+        })
+        .catch(() => {});
+}
+
+function handleAuth() {
+    if (isSignedIn) {
+        // Sign out
+        fetch('/api/auth/logout', { method: 'POST' })
+            .then(() => {
+                isSignedIn = false;
+                checkAuthStatus();
+            });
+    } else {
+        // Open OAuth popup
+        const w = 500, h = 600;
+        const left = (screen.width - w) / 2;
+        const top = (screen.height - h) / 2;
+        window.open(
+            '/api/auth/login',
+            'RecHoop Google Sign-In',
+            `width=${w},height=${h},left=${left},top=${top}`
+        );
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Comment replies
+// ---------------------------------------------------------------------------
+
+function showReplyBox(btn, commentId) {
+    // Remove any existing reply boxes
+    document.querySelectorAll('.reply-box').forEach(el => el.remove());
+
+    if (!isSignedIn) {
+        const hint = document.createElement('div');
+        hint.className = 'reply-box text-xs text-gray-500 mt-1 italic';
+        hint.textContent = 'Sign in with Google to reply to comments.';
+        btn.parentElement.appendChild(hint);
+        setTimeout(() => hint.remove(), 3000);
+        return;
+    }
+
+    const box = document.createElement('div');
+    box.className = 'reply-box mt-1 flex gap-1';
+    box.innerHTML = `
+        <input type="text" placeholder="Write a reply…"
+               class="flex-1 bg-hoop-darker border border-hoop-border rounded px-2 py-1 text-xs text-white placeholder-gray-500 focus:outline-none focus:border-hoop-orange/50" />
+        <button onclick="submitReply(this, '${escapeAttr(commentId)}')"
+                class="bg-hoop-orange hover:bg-hoop-amber text-white text-xs px-2 py-1 rounded transition-colors">
+            Reply
+        </button>
+    `;
+    btn.parentElement.appendChild(box);
+    box.querySelector('input').focus();
+    box.querySelector('input').addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') {
+            e.preventDefault();
+            submitReply(box.querySelector('button'), commentId);
+        }
+    });
+}
+
+function submitReply(btn, commentId) {
+    const box = btn.closest('.reply-box');
+    const input = box.querySelector('input');
+    const text = input.value.trim();
+    if (!text) return;
+
+    btn.disabled = true;
+    btn.textContent = '…';
+
+    fetch('/api/comments/reply', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ parent_id: commentId, text }),
+    })
+    .then(r => {
+        if (r.status === 401) {
+            box.innerHTML = '<span class="text-xs text-red-400">Sign in required.</span>';
+            setTimeout(() => box.remove(), 2000);
+            return;
+        }
+        return r.json();
+    })
+    .then(data => {
+        if (data && data.status === 'ok') {
+            box.innerHTML = '<span class="text-xs text-green-400">Reply posted ✓</span>';
+            setTimeout(() => box.remove(), 2000);
+        } else if (data) {
+            box.innerHTML = '<span class="text-xs text-red-400">Failed to post reply.</span>';
+            setTimeout(() => box.remove(), 3000);
+        }
+    })
+    .catch(() => {
+        box.innerHTML = '<span class="text-xs text-red-400">Network error.</span>';
+        setTimeout(() => box.remove(), 3000);
+    });
 }

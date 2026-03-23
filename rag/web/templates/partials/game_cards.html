@@ -1,8 +1,8 @@
 <!-- partials/game_card.html — Rendered for each game on the landing page -->
 {% for game in games %}
-<div class="bg-hoop-card rounded-xl overflow-hidden border border-hoop-border hover:border-hoop-orange/50 transition-all duration-200 group fade-in">
-    <!-- Thumbnail -->
-    <a href="{{ game.youtube_url }}" target="_blank" rel="noopener" class="block relative">
+<div class="bg-hoop-card rounded-xl overflow-hidden border border-hoop-border hover:border-hoop-orange/50 transition-all duration-200 group fade-in" data-video-id="{{ game.video_id }}">
+    <!-- Thumbnail — clicking opens embedded player -->
+    <div class="block relative cursor-pointer" onclick="playVideo('{{ game.video_id }}')">
         {% if game.thumbnail_url %}
         <img src="{{ game.thumbnail_url }}" alt="{{ game.player1 }} vs {{ game.player2 }}"
              class="w-full aspect-video object-cover group-hover:brightness-110 transition-all"
@@ -24,7 +24,9 @@
             {{ (game.duration_sec // 60) }}:{{ '%02d' % (game.duration_sec % 60) }}
         </span>
         {% endif %}
-    </a>
+        <!-- Watched badge (populated via JS) -->
+        <span class="watched-indicator absolute top-2 left-2 hidden"></span>
+    </div>
 
     <!-- Info -->
     <div class="p-3 space-y-2">
@@ -63,7 +65,7 @@
         {% endif %}
 
         <!-- Actions -->
-        <div class="flex items-center gap-2 pt-1">
+        <div class="flex items-center gap-2 pt-1 flex-wrap">
             <button class="text-xs text-gray-400 hover:text-hoop-orange transition-colors"
                     onclick="askAboutGame('{{ game.player1 }}', '{{ game.player2 }}')">
                 💬 Ask about this game
@@ -75,6 +77,11 @@
                     hx-indicator="#spinner-{{ game.video_id }}">
                 💬 Comments
                 <span id="spinner-{{ game.video_id }}" class="htmx-indicator text-xs">⏳</span>
+            </button>
+            <button class="watch-btn text-xs transition-colors"
+                    data-video-id="{{ game.video_id }}"
+                    onclick="toggleWatched('{{ game.video_id }}', this)">
+                👁️ Mark watched
             </button>
         </div>
 

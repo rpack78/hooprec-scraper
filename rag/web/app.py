@@ -28,7 +28,18 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from starlette.middleware.sessions import SessionMiddleware
 
-from rag.web.db import get_latest_games, get_top_comments, get_game_count
+from rag.web.db import (
+    get_latest_games,
+    get_top_comments,
+    get_game_count,
+    ensure_web_tables,
+    mark_watched,
+    unmark_watched,
+    get_watched,
+    save_google_tokens,
+    get_google_tokens,
+    clear_google_tokens,
+)
 
 logging.basicConfig(
     level=logging.WARNING,
@@ -299,6 +310,7 @@ async def _preload_suggested():
 
 @app.on_event("startup")
 async def on_startup():
+    ensure_web_tables()
     asyncio.create_task(_preload_suggested())
 
 
@@ -480,6 +492,249 @@ async def chat_mode(request: Request, mode: str):
     session = _get_session(request)
     session["mode"] = mode
     return {"status": "ok", "mode": mode}
+
+
+# ---------------------------------------------------------------------------
+# Watch tracking
+# ---------------------------------------------------------------------------
+
+@app.get("/api/watch")
+async def watch_list():
+    """Return all watched video IDs with their dates."""
+    return get_watched()
+
+
+@app.post("/api/watch/{video_id}")
+async def watch_mark(video_id: str):
+    """Mark a video as watched (today's date)."""
+    result = mark_watched(video_id)
+    return result
+
+
+@app.delete("/api/watch/{video_id}")
+async def watch_unmark(video_id: str):
+    """Remove watched status from a video."""
+    removed = unmark_watched(video_id)
+    return {"removed": removed}
+
+
+# ---------------------------------------------------------------------------
+# Google OAuth 2.0 — YouTube commenting
+# ---------------------------------------------------------------------------
+
+_GOOGLE_AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth"
+_GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token"
+_YOUTUBE_SCOPES = "https://www.googleapis.com/auth/youtube.force-ssl"
+
+
+@app.get("/api/auth/status")
+async def auth_status():
+    """Check if user is signed in with Google."""
+    tokens = get_google_tokens()
+    if tokens and tokens.get("access_token"):
+        return {"signed_in": True, "email": tokens.get("email")}
+    return {"signed_in": False}
+
+
+@app.get("/api/auth/login")
+async def auth_login(request: Request):
+    """Redirect to Google OAuth consent screen."""
+    from rag.config import GOOGLE_CLIENT_ID
+    if not GOOGLE_CLIENT_ID:
+        return Response(status_code=500, content="GOOGLE_CLIENT_ID not configured")
+
+    from urllib.parse import urlencode
+    base_url = str(request.base_url).rstrip("/")
+    redirect_uri = f"{base_url}/api/auth/callback"
+
+    params = urlencode({
+        "client_id": GOOGLE_CLIENT_ID,
+        "redirect_uri": redirect_uri,
+        "response_type": "code",
+        "scope": _YOUTUBE_SCOPES,
+        "access_type": "offline",
+        "prompt": "consent",
+    })
+    from fastapi.responses import RedirectResponse
+    return RedirectResponse(url=f"{_GOOGLE_AUTH_URL}?{params}")
+
+
+@app.get("/api/auth/callback")
+async def auth_callback(request: Request, code: str = ""):
+    """Handle Google OAuth callback — exchange code for tokens."""
+    if not code:
+        return Response(status_code=400, content="Missing authorization code")
+
+    from rag.config import GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET
+    import httpx
+
+    base_url = str(request.base_url).rstrip("/")
+    redirect_uri = f"{base_url}/api/auth/callback"
+
+    async with httpx.AsyncClient() as client:
+        # Exchange code for tokens
+        token_resp = await client.post(_GOOGLE_TOKEN_URL, data={
+            "code": code,
+            "client_id": GOOGLE_CLIENT_ID,
+            "client_secret": GOOGLE_CLIENT_SECRET,
+            "redirect_uri": redirect_uri,
+            "grant_type": "authorization_code",
+        })
+        if token_resp.status_code != 200:
+            log.error("OAuth token exchange failed: %s", token_resp.text)
+            return HTMLResponse(
+                "<script>window.close();alert('OAuth failed');</script>",
+                status_code=400,
+            )
+
+        token_data = token_resp.json()
+        access_token = token_data["access_token"]
+        refresh_token = token_data.get("refresh_token", "")
+        expires_in = token_data.get("expires_in", 3600)
+
+        from datetime import datetime, timedelta
+        expiry = (datetime.utcnow() + timedelta(seconds=expires_in)).isoformat()
+
+        # Get user email
+        userinfo_resp = await client.get(
+            "https://www.googleapis.com/oauth2/v2/userinfo",
+            headers={"Authorization": f"Bearer {access_token}"},
+        )
+        email = userinfo_resp.json().get("email", "") if userinfo_resp.status_code == 200 else ""
+
+    save_google_tokens(access_token, refresh_token, expiry, email)
+
+    # Close the popup and notify the opener
+    return HTMLResponse("""
+        <script>
+            if (window.opener) {
+                window.opener.postMessage({type: 'oauth_complete'}, '*');
+            }
+            window.close();
+        </script>
+    """)
+
+
+@app.post("/api/auth/logout")
+async def auth_logout():
+    """Clear stored Google OAuth tokens."""
+    clear_google_tokens()
+    return {"status": "ok"}
+
+
+async def _get_valid_access_token() -> str | None:
+    """Return a valid access token, refreshing if expired."""
+    tokens = get_google_tokens()
+    if not tokens or not tokens.get("access_token"):
+        return None
+
+    from datetime import datetime
+    expiry_str = tokens.get("token_expiry", "")
+    if expiry_str:
+        try:
+            expiry = datetime.fromisoformat(expiry_str)
+            if datetime.utcnow() < expiry:
+                return tokens["access_token"]
+        except ValueError:
+            pass
+
+    # Token expired — try to refresh
+    refresh_token = tokens.get("refresh_token")
+    if not refresh_token:
+        return None
+
+    from rag.config import GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET
+    import httpx
+
+    async with httpx.AsyncClient() as client:
+        resp = await client.post(_GOOGLE_TOKEN_URL, data={
+            "client_id": GOOGLE_CLIENT_ID,
+            "client_secret": GOOGLE_CLIENT_SECRET,
+            "refresh_token": refresh_token,
+            "grant_type": "refresh_token",
+        })
+        if resp.status_code != 200:
+            return None
+
+        data = resp.json()
+        new_access = data["access_token"]
+        expires_in = data.get("expires_in", 3600)
+        from datetime import timedelta
+        new_expiry = (datetime.utcnow() + timedelta(seconds=expires_in)).isoformat()
+        save_google_tokens(new_access, refresh_token, new_expiry)
+        return new_access
+
+
+# ---------------------------------------------------------------------------
+# YouTube comment reply / post
+# ---------------------------------------------------------------------------
+
+@app.post("/api/comments/reply")
+async def comment_reply(request: Request):
+    """Post a reply to a YouTube comment (requires OAuth)."""
+    body = await request.json()
+    parent_id = body.get("parent_id", "").strip()
+    text = body.get("text", "").strip()
+    if not parent_id or not text:
+        return Response(status_code=400, content="Missing parent_id or text")
+
+    access_token = await _get_valid_access_token()
+    if not access_token:
+        return Response(status_code=401, content="Not signed in with Google")
+
+    import httpx
+    async with httpx.AsyncClient() as client:
+        resp = await client.post(
+            "https://www.googleapis.com/youtube/v3/comments",
+            params={"part": "snippet"},
+            headers={"Authorization": f"Bearer {access_token}"},
+            json={
+                "snippet": {
+                    "parentId": parent_id,
+                    "textOriginal": text,
+                }
+            },
+        )
+        if resp.status_code in (200, 201):
+            return {"status": "ok", "comment": resp.json()}
+        log.error("YouTube comment reply failed: %s", resp.text)
+        return Response(status_code=resp.status_code, content=resp.text)
+
+
+@app.post("/api/comments/post")
+async def comment_post(request: Request):
+    """Post a new top-level comment on a YouTube video (requires OAuth)."""
+    body = await request.json()
+    video_id = body.get("video_id", "").strip()
+    text = body.get("text", "").strip()
+    if not video_id or not text:
+        return Response(status_code=400, content="Missing video_id or text")
+
+    access_token = await _get_valid_access_token()
+    if not access_token:
+        return Response(status_code=401, content="Not signed in with Google")
+
+    import httpx
+    async with httpx.AsyncClient() as client:
+        resp = await client.post(
+            "https://www.googleapis.com/youtube/v3/commentThreads",
+            params={"part": "snippet"},
+            headers={"Authorization": f"Bearer {access_token}"},
+            json={
+                "snippet": {
+                    "videoId": video_id,
+                    "topLevelComment": {
+                        "snippet": {
+                            "textOriginal": text,
+                        }
+                    },
+                }
+            },
+        )
+        if resp.status_code in (200, 201):
+            return {"status": "ok", "comment": resp.json()}
+        log.error("YouTube comment post failed: %s", resp.text)
+        return Response(status_code=resp.status_code, content=resp.text)
 
 
 # ---------------------------------------------------------------------------

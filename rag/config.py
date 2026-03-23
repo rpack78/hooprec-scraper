@@ -52,3 +52,9 @@ CONTEXT_WINDOW = int(os.getenv("RAG_CONTEXT_WINDOW", "8192"))
 # ChromaDB collection
 # ---------------------------------------------------------------------------
 CHROMA_COLLECTION = os.getenv("RAG_CHROMA_COLLECTION", "hooprec_youtube")
+
+# ---------------------------------------------------------------------------
+# Google OAuth 2.0 (for YouTube commenting)
+# ---------------------------------------------------------------------------
+GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID", "")
+GOOGLE_CLIENT_SECRET = os.getenv("GOOGLE_CLIENT_SECRET", "")

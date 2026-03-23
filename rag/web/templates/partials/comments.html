@@ -2,12 +2,18 @@
 {% if comments %}
 <div class="mt-2 space-y-2 border-t border-hoop-border pt-2 fade-in">
     {% for c in comments %}
-    <div class="text-xs">
+    <div class="text-xs" data-comment-id="{{ c.comment_id or '' }}">
         <span class="font-medium text-gray-300">{{ c.author or 'Anonymous' }}</span>
         {% if c.like_count %}
         <span class="text-gray-500 ml-1">👍 {{ c.like_count }}</span>
         {% endif %}
         <p class="text-gray-400 mt-0.5 leading-relaxed">{{ c.text[:200] }}{% if c.text|length > 200 %}…{% endif %}</p>
+        {% if c.comment_id %}
+        <button class="text-gray-500 hover:text-hoop-orange transition-colors mt-0.5"
+                onclick="showReplyBox(this, '{{ c.comment_id }}')">
+            ↩ Reply
+        </button>
+        {% endif %}
     </div>
     {% endfor %}
 </div>
