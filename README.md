@@ -21,28 +21,22 @@ The goal: **ask natural-language questions about 1v1 basketball** and get answer
 ## Quick Start
 
 ```bash
-# ── HoopRec Scraper ──
-cd hooprec-ingest
-pip install -r requirements.txt
+# ── Install dependencies ──
+pip install -r hooprec-ingest/requirements.txt
+pip install -r youtube-ingest/requirements.txt
+pip install -r rag/requirements.txt
 playwright install chromium
-python hooprec_master_ingest.py
-
-# ── YouTube Ingest ──
-cd ../youtube-ingest
-pip install -r requirements.txt
-python youtube_ingest.py
-
-# ── RAG Chat ──
-cd ../rag
-pip install -r requirements.txt
 ollama pull llama3.1:8b
 ollama pull nomic-embed-text
 
-cd ..
-python -m rag.ingest              # embed YouTube markdown into ChromaDB
+# ── Run pipelines ──
+python hooprec-ingest/hooprec_master_ingest.py   # scrape hooprec.com
+python youtube-ingest/youtube_ingest.py          # enrich with YouTube data
+python -m rag.ingest                             # embed into ChromaDB
+
+# ── Launch ──
 python -m rag.cli                 # interactive CLI
-python -m rag.web.app             # web UI at localhost:8000
-                                  # Discover page at localhost:8000/discover
+python -m rag.web                 # web UI at localhost:8000
 ```
 
 ## Tech Stack
