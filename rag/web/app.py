@@ -101,7 +101,8 @@ _STATS_KEYWORDS = re.compile(
 # List-all / chronological keywords → should go to SQL for comprehensive results
 _LIST_KEYWORDS = re.compile(
     r"\b(all\s+(the\s+)?games|every\s+game|chronological|"
-    r"in\s+order|list\s+(all|every|the)|full\s+list|show\s+me\s+all)\b",
+    r"in\s+order|list\s+(all|every|the)|full\s+list|show\s+me\s+all|"
+    r"show\s+me\s+games|games?\s+(featuring|with|of))\b",
     re.IGNORECASE,
 )
 
@@ -121,6 +122,7 @@ def _normalize_player_text(text: str) -> str:
 def _build_player_aliases(player_names: list[str]) -> dict[str, list[str]]:
     aliases: dict[str, set[str]] = {}
     first_token_counts: dict[str, int] = {}
+    short_token_counts: dict[str, int] = {}
 
     for name in player_names:
         normalized = _normalize_player_text(name)
@@ -131,6 +133,18 @@ def _build_player_aliases(player_names: list[str]) -> dict[str, list[str]]:
         if tokens:
             first_token = tokens[0]
             first_token_counts[first_token] = first_token_counts.get(first_token, 0) + 1
+
+        original_tokens = re.findall(r"[A-Za-z0-9']+", name)
+        for index, token in enumerate(original_tokens):
+            token_norm = _normalize_player_text(token)
+            if not token_norm:
+                continue
+            if token.lower() == "aka" and index + 1 < len(original_tokens):
+                aka_norm = _normalize_player_text(original_tokens[index + 1])
+                if aka_norm:
+                    short_token_counts[aka_norm] = short_token_counts.get(aka_norm, 0) + 1
+            if 2 <= len(token_norm) <= 4 and token.upper() == token and token_norm not in _ALIAS_STOPWORDS:
+                short_token_counts[token_norm] = short_token_counts.get(token_norm, 0) + 1
 
     for name in player_names:
         normalized = _normalize_player_text(name)
@@ -145,6 +159,26 @@ def _build_player_aliases(player_names: list[str]) -> dict[str, list[str]]:
             and first_token not in _ALIAS_STOPWORDS
         ):
             aliases.setdefault(first_token, set()).add(name)
+
+        original_tokens = re.findall(r"[A-Za-z0-9']+", name)
+        for index, token in enumerate(original_tokens):
+            token_norm = _normalize_player_text(token)
+            if not token_norm:
+                continue
+
+            aka_alias = None
+            if token.lower() == "aka" and index + 1 < len(original_tokens):
+                aka_alias = _normalize_player_text(original_tokens[index + 1])
+            if aka_alias and short_token_counts.get(aka_alias) == 1:
+                aliases.setdefault(aka_alias, set()).add(name)
+
+            if (
+                2 <= len(token_norm) <= 4
+                and token.upper() == token
+                and token_norm not in _ALIAS_STOPWORDS
+                and short_token_counts.get(token_norm) == 1
+            ):
+                aliases.setdefault(token_norm, set()).add(name)
 
     return {alias: sorted(names, key=len, reverse=True) for alias, names in aliases.items()}
 
