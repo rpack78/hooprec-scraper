@@ -122,6 +122,12 @@ _ALIAS_STOPWORDS = {
     "show", "stats", "the", "to", "vs", "what", "who", "will",
 }
 
+# Manual aliases for community nicknames that can't be auto-resolved.
+# Maps normalized nickname → canonical DB name(s).
+_MANUAL_ALIASES: dict[str, list[str]] = {
+    "nas": ["Nasir Core"],
+}
+
 
 def _normalize_player_text(text: str) -> str:
     text = text.lower().replace("'s", "")
@@ -195,6 +201,10 @@ def _build_player_aliases(player_names: list[str]) -> dict[str, list[str]]:
             ):
                 aliases.setdefault(token_norm, set()).add(name)
 
+    # Merge manual aliases (override auto-detected ones for these keys)
+    for alias_key, canonical_names in _MANUAL_ALIASES.items():
+        aliases[alias_key] = set(canonical_names)
+
     return {alias: sorted(names, key=len, reverse=True) for alias, names in aliases.items()}
 
 
@@ -238,6 +248,7 @@ def _detect_players(query: str) -> list[str]:
 
     Matches full names first, then unique short-name aliases like "Rob" for
     "Rob Colon", while also handling possessives such as "Rob's".
+    Falls back to unique-prefix matching for short tokens like "Nas" → "Nash".
     """
     normalized_query = _normalize_player_text(query)
     found: list[str] = []
@@ -251,6 +262,22 @@ def _detect_players(query: str) -> list[str]:
             if name not in seen:
                 found.append(name)
                 seen.add(name)
+
+    # Prefix fallback: if no exact match, check if any query token is a unique
+    # prefix of an alias (e.g. "nas" → "nash")
+    if not found:
+        query_tokens = [t for t in normalized_query.split() if len(t) >= 3 and t not in _ALIAS_STOPWORDS]
+        all_aliases = list(_player_aliases.keys())
+        for qt in query_tokens:
+            prefix_matches: list[str] = []
+            for alias in all_aliases:
+                if alias.startswith(qt) and alias != qt:
+                    prefix_matches.append(alias)
+            if len(prefix_matches) == 1:
+                for name in _player_aliases[prefix_matches[0]]:
+                    if name not in seen:
+                        found.append(name)
+                        seen.add(name)
 
     return found
 
