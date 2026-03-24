@@ -121,7 +121,8 @@ def _normalize_player_text(text: str) -> str:
 
 def _build_player_aliases(player_names: list[str]) -> dict[str, list[str]]:
     aliases: dict[str, set[str]] = {}
-    first_token_counts: dict[str, int] = {}
+    # Count how many players share each normalized token
+    token_counts: dict[str, int] = {}
     short_token_counts: dict[str, int] = {}
 
     for name in player_names:
@@ -130,9 +131,11 @@ def _build_player_aliases(player_names: list[str]) -> dict[str, list[str]]:
             continue
         aliases.setdefault(normalized, set()).add(name)
         tokens = normalized.split()
-        if tokens:
-            first_token = tokens[0]
-            first_token_counts[first_token] = first_token_counts.get(first_token, 0) + 1
+        seen_tokens: set[str] = set()
+        for t in tokens:
+            if t not in seen_tokens:
+                token_counts[t] = token_counts.get(t, 0) + 1
+                seen_tokens.add(t)
 
         original_tokens = re.findall(r"[A-Za-z0-9']+", name)
         for index, token in enumerate(original_tokens):
@@ -152,13 +155,15 @@ def _build_player_aliases(player_names: list[str]) -> dict[str, list[str]]:
         if not tokens:
             continue
 
-        first_token = tokens[0]
-        if (
-            len(first_token) >= 3
-            and first_token_counts.get(first_token) == 1
-            and first_token not in _ALIAS_STOPWORDS
-        ):
-            aliases.setdefault(first_token, set()).add(name)
+        # Register any unique token (>= 3 chars, not a stopword) as an alias
+        if len(tokens) > 1:
+            for t in tokens:
+                if (
+                    len(t) >= 3
+                    and token_counts.get(t) == 1
+                    and t not in _ALIAS_STOPWORDS
+                ):
+                    aliases.setdefault(t, set()).add(name)
 
         original_tokens = re.findall(r"[A-Za-z0-9']+", name)
         for index, token in enumerate(original_tokens):
