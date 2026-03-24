@@ -508,12 +508,13 @@ async def chat(request: Request):
                     note = f"⚡ {route_label}"
                     yield f"event: route\ndata: {json.dumps(note)}\n\n"
 
-                    # Only show winners if the user explicitly asks
-                    _WINNER_KW = re.compile(
-                        r"\b(who\s+won|winner|win|wins|record|results?|W-L|losses?)\b",
+                    # Scores reveal the winner, so only show any outcome details
+                    # when the user explicitly asks for them.
+                    _OUTCOME_KW = re.compile(
+                        r"\b(who\s+won|winner|win|wins|record|results?|W-L|losses?|scores?|final)\b",
                         re.IGNORECASE,
                     )
-                    show_winner = bool(_WINNER_KW.search(message))
+                    show_outcome = bool(_OUTCOME_KW.search(message))
 
                     from rag.web.db import get_player_games
                     db_games = get_player_games(players, limit=50)
@@ -524,14 +525,16 @@ async def chat(request: Request):
                         lines = [f"Found **{len(db_games)} games** for {player_label}:\n"]
                         for g in db_games:
                             p1, p2 = g.get("player1_name", ""), g.get("player2_name", "")
-                            s1, s2 = g.get("player1_score", ""), g.get("player2_score", "")
                             d = g.get("match_date", "")
-                            if show_winner:
+                            if show_outcome:
+                                s1, s2 = g.get("player1_score", ""), g.get("player2_score", "")
                                 w = g.get("winner_name", "")
-                                winner_tag = f" — **{w} wins**" if w else ""
+                                outcome_tag = f" {s1}–{s2}"
+                                if w:
+                                    outcome_tag += f" — **{w} wins**"
                             else:
-                                winner_tag = ""
-                            lines.append(f"- **{p1}** {s1}–{s2} **{p2}** ({d}){winner_tag}")
+                                outcome_tag = ""
+                            lines.append(f"- **{p1}**{outcome_tag} **vs** **{p2}** ({d})")
                         text = "\n".join(lines)
 
                     for i in range(0, len(text), 20):
