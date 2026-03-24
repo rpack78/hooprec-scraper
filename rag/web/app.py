@@ -527,9 +527,13 @@ async def chat(request: Request):
                     if not db_games:
                         text = f"No games found for {player_label}."
                     else:
+                        players_lower = {p.lower() for p in players}
                         lines = [f"Found **{len(db_games)} games** for {player_label}:\n"]
                         for g in db_games:
                             p1, p2 = g.get("player1_name", ""), g.get("player2_name", "")
+                            # Put the queried player on the left for easy scanning
+                            if p2.lower() in players_lower and p1.lower() not in players_lower:
+                                p1, p2 = p2, p1
                             d = g.get("match_date", "")
                             if show_outcome:
                                 s1, s2 = g.get("player1_score", ""), g.get("player2_score", "")
