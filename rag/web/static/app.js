@@ -14,6 +14,9 @@ let chatStarted = false;
 let streamingRawText = '';  // accumulates raw text during streaming
 let watchedVideos = {};     // video_id -> watched_at date string
 let isSignedIn = false;
+let messageSourceCache = new Map(); // assistant wrapper DOM el -> cards array
+let activeSourceMessage = null;      // currently highlighted assistant message
+let currentAssistantWrapper = null;  // wrapper being streamed into
 
 // Load watched state and auth status on page load
 document.addEventListener('DOMContentLoaded', () => {
@@ -22,6 +25,9 @@ document.addEventListener('DOMContentLoaded', () => {
     window.addEventListener('message', (e) => {
         if (e.data && e.data.type === 'oauth_complete') {
             checkAuthStatus();
+        }
+        if (e.data && e.data.type === 'oauth_error') {
+            showToast(e.data.message || 'Sign-in failed.');
         }
     });
 });
@@ -137,6 +143,7 @@ function sendMessage(message) {
     // Create assistant bubble (will stream into)
     streamingRawText = '';
     const assistantBubble = appendMessage('assistant', '');
+    currentAssistantWrapper = assistantBubble;
     const contentEl = assistantBubble.querySelector('.msg-content');
     contentEl.classList.add('typing-cursor');
 
@@ -209,6 +216,9 @@ function handleSSEEvent(eventType, data, contentEl, sourceCards) {
             try {
                 const cards = JSON.parse(data);
                 renderSourceCards(cards, sourceCards);
+                if (currentAssistantWrapper) {
+                    messageSourceCache.set(currentAssistantWrapper, cards);
+                }
             } catch (e) { /* ignore parse errors */ }
             break;
 
@@ -238,6 +248,12 @@ function finishStream(contentEl, input, btn) {
     btn.disabled = false;
     input.focus();
     scrollToBottom();
+
+    // Mark this message as the active source provider
+    if (currentAssistantWrapper && messageSourceCache.has(currentAssistantWrapper)) {
+        activateSourceMessage(currentAssistantWrapper);
+    }
+    currentAssistantWrapper = null;
 
     // Add "Show me more" button after the response
     const moreBtn = document.createElement('button');
@@ -270,6 +286,18 @@ function appendMessage(role, text) {
         content.textContent = text;
     } else {
         content.innerHTML = text ? renderMarkdown(text) : '';
+        // Make assistant messages clickable to reload their cached source cards
+        wrapper.style.cursor = 'pointer';
+        wrapper.addEventListener('click', (e) => {
+            // Don't intercept clicks on links, buttons, or the video player
+            if (e.target.closest('a, button')) return;
+            const cached = messageSourceCache.get(wrapper);
+            if (cached) {
+                const sourceCards = document.getElementById('source-cards');
+                renderSourceCards(cached, sourceCards);
+                activateSourceMessage(wrapper);
+            }
+        });
     }
 
     bubble.appendChild(content);
@@ -282,6 +310,22 @@ function appendMessage(role, text) {
 function scrollToBottom() {
     const container = document.getElementById('chat-container');
     container.scrollTop = container.scrollHeight;
+}
+
+function activateSourceMessage(wrapperEl) {
+    // Remove active state from previous message
+    if (activeSourceMessage) {
+        const prevBubble = activeSourceMessage.querySelector('div > div');
+        if (prevBubble) {
+            prevBubble.classList.remove('ring-1', 'ring-hoop-orange/50');
+        }
+    }
+    activeSourceMessage = wrapperEl;
+    // Highlight the active message bubble
+    const bubble = wrapperEl.querySelector('div > div');
+    if (bubble) {
+        bubble.classList.add('ring-1', 'ring-hoop-orange/50');
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -462,6 +506,9 @@ function clearChat() {
     document.getElementById('chat-messages').innerHTML = '';
     document.getElementById('source-cards').innerHTML =
         '<p class="text-xs text-gray-500 italic">Sources will appear here when you ask a question.</p>';
+    messageSourceCache = new Map();
+    activeSourceMessage = null;
+    currentAssistantWrapper = null;
     // Optionally go back to landing
     chatStarted = false;
     document.getElementById('landing').classList.remove('hidden');
@@ -488,6 +535,15 @@ function escapeHtml(str) {
 function escapeAttr(str) {
     if (!str) return '';
     return str.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/'/g, '&#39;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+function showToast(msg) {
+    const el = document.createElement('div');
+    el.className = 'fixed top-4 left-1/2 -translate-x-1/2 bg-hoop-card border border-hoop-orange/40 text-sm text-gray-200 px-4 py-2 rounded-lg shadow-lg z-50 fade-in';
+    el.textContent = msg;
+    document.body.appendChild(el);
+    setTimeout(() => { el.style.opacity = '0'; el.style.transition = 'opacity 0.3s'; }, 3000);
+    setTimeout(() => el.remove(), 3400);
 }
 
 // ---------------------------------------------------------------------------

@@ -420,6 +420,13 @@ async def chat(request: Request):
                     note = f"⚡ {route_label}"
                     yield f"event: route\ndata: {json.dumps(note)}\n\n"
 
+                    # Only show winners if the user explicitly asks
+                    _WINNER_KW = re.compile(
+                        r"\b(who\s+won|winner|win|wins|record|results?|W-L|losses?)\b",
+                        re.IGNORECASE,
+                    )
+                    show_winner = bool(_WINNER_KW.search(message))
+
                     from rag.web.db import get_player_games
                     db_games = get_player_games(players, limit=50)
                     player_label = " & ".join(players)
@@ -430,9 +437,12 @@ async def chat(request: Request):
                         for g in db_games:
                             p1, p2 = g.get("player1_name", ""), g.get("player2_name", "")
                             s1, s2 = g.get("player1_score", ""), g.get("player2_score", "")
-                            w = g.get("winner_name", "")
                             d = g.get("match_date", "")
-                            winner_tag = f" — **{w} wins**" if w else ""
+                            if show_winner:
+                                w = g.get("winner_name", "")
+                                winner_tag = f" — **{w} wins**" if w else ""
+                            else:
+                                winner_tag = ""
                             lines.append(f"- **{p1}** {s1}–{s2} **{p2}** ({d}){winner_tag}")
                         text = "\n".join(lines)
 
@@ -603,7 +613,13 @@ async def auth_login(request: Request):
     """Redirect to Google OAuth consent screen."""
     from rag.config import GOOGLE_CLIENT_ID
     if not GOOGLE_CLIENT_ID:
-        return Response(status_code=500, content="GOOGLE_CLIENT_ID not configured")
+        html = (
+            "<html><body><script>"
+            "window.opener && window.opener.postMessage({type:'oauth_error',message:'Google Sign-In is not configured yet.'},'*');"
+            "window.close();"
+            "</script><p>Google Sign-In is not configured. You can close this window.</p></body></html>"
+        )
+        return Response(content=html, media_type="text/html")
 
     from urllib.parse import urlencode
     base_url = str(request.base_url).rstrip("/")
