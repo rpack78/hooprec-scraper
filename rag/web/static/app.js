@@ -17,6 +17,7 @@ let isSignedIn = false;
 let messageSourceCache = new Map(); // assistant wrapper DOM el -> cards array
 let activeSourceMessage = null;      // currently highlighted assistant message
 let currentAssistantWrapper = null;  // wrapper being streamed into
+let currentResponseCards = [];       // cards streamed for the active assistant response
 
 // Load watched state and auth status on page load
 document.addEventListener('DOMContentLoaded', () => {
@@ -122,6 +123,7 @@ function askAboutGame(player1, player2) {
 function sendMessage(message) {
     if (isStreaming) return;
     isStreaming = true;
+    currentResponseCards = [];
 
     // Transition from landing to chat view
     if (!chatStarted) {
@@ -167,7 +169,7 @@ function sendMessage(message) {
         function read() {
             reader.read().then(({ done, value }) => {
                 if (done) {
-                    finishStream(contentEl, input, btn);
+                    finishStream(contentEl, input, btn, message);
                     return;
                 }
 
@@ -190,7 +192,7 @@ function sendMessage(message) {
         read();
     }).catch(err => {
         contentEl.textContent = `Error: ${err.message}`;
-        finishStream(contentEl, input, btn);
+        finishStream(contentEl, input, btn, message);
     });
 }
 
@@ -215,6 +217,7 @@ function handleSSEEvent(eventType, data, contentEl, sourceCards) {
         case 'sources':
             try {
                 const cards = JSON.parse(data);
+                currentResponseCards = cards;
                 renderSourceCards(cards, sourceCards);
                 if (currentAssistantWrapper) {
                     messageSourceCache.set(currentAssistantWrapper, cards);
@@ -236,7 +239,7 @@ function handleSSEEvent(eventType, data, contentEl, sourceCards) {
     }
 }
 
-function finishStream(contentEl, input, btn) {
+function finishStream(contentEl, input, btn, message) {
     contentEl.classList.remove('typing-cursor');
     // Final markdown render pass
     if (streamingRawText) {
@@ -255,15 +258,81 @@ function finishStream(contentEl, input, btn) {
     }
     currentAssistantWrapper = null;
 
-    // Add "Show me more" button after the response
-    const moreBtn = document.createElement('button');
-    moreBtn.className = 'text-xs text-hoop-orange hover:text-hoop-amber transition-colors mt-2 flex items-center gap-1';
-    moreBtn.innerHTML = '↓ Show me more';
-    moreBtn.onclick = () => {
-        moreBtn.remove();
-        sendMessage('Show me more results like the previous answer, but different games I haven\'t seen yet');
-    };
-    contentEl.parentElement.appendChild(moreBtn);
+    const suggestion = buildSuggestedPrompt(message, currentResponseCards);
+    currentResponseCards = [];
+    if (suggestion) {
+        const promptBtn = document.createElement('button');
+        promptBtn.className = 'text-xs text-hoop-orange hover:text-hoop-amber transition-colors mt-2 inline-flex items-center gap-1 rounded-full border border-hoop-orange/30 px-3 py-1.5 bg-hoop-orange/10';
+        promptBtn.innerHTML = `✦ ${escapeHtml(suggestion)}`;
+        promptBtn.title = 'Ask this suggested follow-up';
+        promptBtn.onclick = (e) => {
+            e.stopPropagation();
+            promptBtn.remove();
+            sendMessage(suggestion);
+        };
+        contentEl.parentElement.appendChild(promptBtn);
+    }
+}
+
+function buildSuggestedPrompt(message, cards) {
+    const text = (message || '').trim();
+    if (!text) return null;
+
+    const lower = text.toLowerCase();
+    const focusPlayer = getSuggestedPlayer(text, cards);
+
+    if (/\b(all|every|list|chronological|show me all|full list)\b/.test(lower)) {
+        return focusPlayer
+            ? `Which ${focusPlayer} game should I watch first?`
+            : 'Which of these games should I watch first?';
+    }
+
+    if (/\b(game between|tell me about|break down|what happened)\b/.test(lower)) {
+        return focusPlayer
+            ? `Show me another good game featuring ${focusPlayer}.`
+            : 'Show me another game like this one.';
+    }
+
+    if (/\b(best|top|greatest|right now|record|stats|tallest|who is|who has)\b/.test(lower)) {
+        return focusPlayer
+            ? `Show me a game that explains why ${focusPlayer} stands out.`
+            : 'Show me a game that backs that up.';
+    }
+
+    if (cards && cards.length > 0) {
+        return focusPlayer
+            ? `Show me the best recent ${focusPlayer} game.`
+            : 'Show me the best video to start with.';
+    }
+
+    return 'Show me a game related to that answer.';
+}
+
+function getSuggestedPlayer(message, cards) {
+    if (!cards || cards.length === 0) return null;
+
+    const lower = (message || '').toLowerCase();
+    const counts = new Map();
+    for (const card of cards) {
+        for (const name of [card.player1, card.player2]) {
+            if (!name) continue;
+            counts.set(name, (counts.get(name) || 0) + 1);
+        }
+    }
+
+    let bestName = null;
+    let bestScore = -1;
+    for (const [name, count] of counts.entries()) {
+        let score = count;
+        if (lower.includes(name.toLowerCase())) {
+            score += 100;
+        }
+        if (score > bestScore) {
+            bestScore = score;
+            bestName = name;
+        }
+    }
+    return bestName;
 }
 
 // ---------------------------------------------------------------------------
@@ -287,8 +356,10 @@ function appendMessage(role, text) {
     } else {
         content.innerHTML = text ? renderMarkdown(text) : '';
         // Make assistant messages clickable to reload their cached source cards
-        wrapper.style.cursor = 'pointer';
-        wrapper.addEventListener('click', (e) => {
+        bubble.style.cursor = 'pointer';
+        bubble.title = 'Click to show source videos';
+        bubble.classList.add('hover:border-hoop-orange/40', 'transition-colors');
+        bubble.addEventListener('click', (e) => {
             // Don't intercept clicks on links, buttons, or the video player
             if (e.target.closest('a, button')) return;
             const cached = messageSourceCache.get(wrapper);

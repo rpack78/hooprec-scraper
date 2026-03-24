@@ -64,6 +64,7 @@ app.add_middleware(SessionMiddleware, secret_key=uuid.uuid4().hex)
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
 templates = Jinja2Templates(directory=TEMPLATES_DIR)
+templates.env.globals["cache_bust"] = uuid.uuid4().hex[:8]
 
 
 # ---------------------------------------------------------------------------
@@ -75,6 +76,7 @@ _vector_index = None     # kept so we can create filtered retrievers on demand
 _vector_engine = None
 _sql_engine = None
 _player_names: list[str] = []   # sorted longest-first for greedy matching
+_player_aliases: dict[str, list[str]] = {}
 
 # session_id -> {"mode": "auto"|"sql"|"vector"}
 _sessions: dict[str, dict] = {}
@@ -103,10 +105,53 @@ _LIST_KEYWORDS = re.compile(
     re.IGNORECASE,
 )
 
+_ALIAS_STOPWORDS = {
+    "a", "an", "and", "ant", "at", "best", "for", "games", "game", "how",
+    "i", "in", "is", "it", "me", "more", "of", "on", "or", "record",
+    "show", "stats", "the", "to", "vs", "what", "who", "will",
+}
+
+
+def _normalize_player_text(text: str) -> str:
+    text = text.lower().replace("'s", "")
+    text = re.sub(r"[^a-z0-9]+", " ", text)
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def _build_player_aliases(player_names: list[str]) -> dict[str, list[str]]:
+    aliases: dict[str, set[str]] = {}
+    first_token_counts: dict[str, int] = {}
+
+    for name in player_names:
+        normalized = _normalize_player_text(name)
+        if not normalized:
+            continue
+        aliases.setdefault(normalized, set()).add(name)
+        tokens = normalized.split()
+        if tokens:
+            first_token = tokens[0]
+            first_token_counts[first_token] = first_token_counts.get(first_token, 0) + 1
+
+    for name in player_names:
+        normalized = _normalize_player_text(name)
+        tokens = normalized.split()
+        if not tokens:
+            continue
+
+        first_token = tokens[0]
+        if (
+            len(first_token) >= 3
+            and first_token_counts.get(first_token) == 1
+            and first_token not in _ALIAS_STOPWORDS
+        ):
+            aliases.setdefault(first_token, set()).add(name)
+
+    return {alias: sorted(names, key=len, reverse=True) for alias, names in aliases.items()}
+
 
 def _init_engines():
     """Lazily initialize the query engines on first request."""
-    global _engines_ready, _vector_index, _vector_engine, _sql_engine, _player_names
+    global _engines_ready, _vector_index, _vector_engine, _sql_engine, _player_names, _player_aliases
 
     if _engines_ready:
         return
@@ -130,6 +175,7 @@ def _init_engines():
         conn = sqlite3.connect(str(DB_PATH))
         rows = conn.execute("SELECT name FROM players ORDER BY LENGTH(name) DESC").fetchall()
         _player_names = [r[0] for r in rows]
+        _player_aliases = _build_player_aliases(_player_names)
         conn.close()
         log.info("Loaded %d player names for smart routing", len(_player_names))
     except Exception:
@@ -139,16 +185,24 @@ def _init_engines():
 
 
 def _detect_players(query: str) -> list[str]:
-    """Return player names found in the query (case-insensitive, longest first)."""
-    q_lower = query.lower()
-    found = []
-    for name in _player_names:
-        name_lower = name.lower()
-        # Use word-boundary matching to avoid false positives
-        # e.g. "AB" matching inside "about"
-        pattern = r'(?<![a-z])' + re.escape(name_lower) + r'(?![a-z])'
-        if re.search(pattern, q_lower):
-            found.append(name)
+    """Return canonical player names found in the query.
+
+    Matches full names first, then unique short-name aliases like "Rob" for
+    "Rob Colon", while also handling possessives such as "Rob's".
+    """
+    normalized_query = _normalize_player_text(query)
+    found: list[str] = []
+    seen: set[str] = set()
+
+    for alias, names in sorted(_player_aliases.items(), key=lambda item: len(item[0]), reverse=True):
+        pattern = r'(?<![a-z0-9])' + re.escape(alias) + r'(?![a-z0-9])'
+        if not re.search(pattern, normalized_query):
+            continue
+        for name in names:
+            if name not in seen:
+                found.append(name)
+                seen.add(name)
+
     return found
 
 

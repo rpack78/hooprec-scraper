@@ -106,6 +106,6 @@
 <body class="h-full bg-hoop-darker text-gray-100 antialiased">
     {% block content %}{% endblock %}
 
-    <script src="/static/app.js"></script>
+    <script src="/static/app.js?v={{ cache_bust }}"></script>
 </body>
 </html>
