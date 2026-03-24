@@ -383,6 +383,16 @@ function scrollToBottom() {
     container.scrollTop = container.scrollHeight;
 }
 
+function scrollToCard(videoId) {
+    const panel = document.getElementById('source-panel');
+    const card = panel ? panel.querySelector(`[data-video-id="${CSS.escape(videoId)}"]`) : null;
+    if (card) {
+        card.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        card.classList.add('ring-2', 'ring-hoop-orange');
+        setTimeout(() => card.classList.remove('ring-2', 'ring-hoop-orange'), 2000);
+    }
+}
+
 function activateSourceMessage(wrapperEl) {
     // Remove active state from previous message
     if (activeSourceMessage) {
@@ -488,6 +498,12 @@ function renderMarkdown(raw) {
     text = text.replace(
         /\{\{route:(.+?)\}\}/g,
         '<span class="system-note">$1</span>'
+    );
+
+    // Handle watch tags — clickable arrow to scroll sidebar to the matching video card
+    text = text.replace(
+        /\{\{watch:(.+?)\}\}/g,
+        '<span class="watch-arrow" onclick="scrollToCard(\'$1\')" title="Show video">&#x25B6;</span>'
     );
 
     // Split into lines for block-level processing

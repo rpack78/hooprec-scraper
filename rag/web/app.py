@@ -543,7 +543,9 @@ async def chat(request: Request):
                                     outcome_tag += f" — **{w} wins**"
                             else:
                                 outcome_tag = ""
-                            lines.append(f"- **{p1}**{outcome_tag} **vs** **{p2}** ({d})")
+                            vid = g.get("video_id", "")
+                            watch_link = f" {{{{watch:{vid}}}}}" if vid else ""
+                            lines.append(f"- **{p1}**{outcome_tag} **vs** **{p2}** ({d}){watch_link}")
                         text = "\n".join(lines)
 
                     for i in range(0, len(text), 20):
