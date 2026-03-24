@@ -22,6 +22,8 @@ import sys
 import uuid
 from pathlib import Path
 
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI, Request, Response
 from fastapi.responses import HTMLResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
@@ -59,7 +61,15 @@ WEB_DIR = Path(__file__).parent
 TEMPLATES_DIR = WEB_DIR / "templates"
 STATIC_DIR = WEB_DIR / "static"
 
-app = FastAPI(title="RecHoop Chat", docs_url=None, redoc_url=None)
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    ensure_web_tables()
+    asyncio.create_task(_warmup_ollama())
+    asyncio.create_task(_preload_suggested())
+    yield
+
+
+app = FastAPI(title="RecHoop Chat", docs_url=None, redoc_url=None, lifespan=lifespan)
 app.add_middleware(SessionMiddleware, secret_key=uuid.uuid4().hex)
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
@@ -404,14 +414,6 @@ async def _preload_suggested():
     log.info("Preloading complete (%d/%d cached)", len(_preloaded_cache), len(_SUGGESTED_PROMPTS))
 
 
-@app.on_event("startup")
-async def on_startup():
-    ensure_web_tables()
-    # Warm up Ollama so the model is loaded into VRAM before any user query
-    asyncio.create_task(_warmup_ollama())
-    asyncio.create_task(_preload_suggested())
-
-
 async def _warmup_ollama():
     """Send a tiny prompt to Ollama so the model is loaded and ready."""
     try:
@@ -422,6 +424,15 @@ async def _warmup_ollama():
         log.warning("Ollama warmup complete — model loaded")
     except Exception:
         log.warning("Ollama warmup failed — first query may be slow")
+
+
+@app.get("/favicon.ico")
+async def favicon():
+    return Response(
+        content=b'\x00\x00\x01\x00\x01\x00\x01\x01\x00\x00\x01\x00\x18\x00\x30\x00\x00\x00\x16\x00\x00\x00\x28\x00\x00\x00\x01\x00\x00\x00\x02\x00\x00\x00\x01\x00\x18\x00\x00\x00\x00\x00\x04\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x16\x97\xf9\x00\x00\x00\x00',
+        media_type="image/x-icon",
+        headers={"Cache-Control": "public, max-age=604800"},
+    )
 
 
 @app.get("/api/channel-icon/{channel_name}")
