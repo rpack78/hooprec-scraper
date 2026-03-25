@@ -16,7 +16,8 @@ Browser-based chat interface with game discovery, built on top of the [RAG Engin
 
 ## Features
 
-- **Landing page** — Latest games grid with YouTube thumbnails, scores, "winner" highlighting, view counts
+- **Landing page** — Latest games grid with YouTube thumbnails, view counts; scores and winner highlights toggle with Watch/Stats mode
+- **Watch/Stats mode** — Toggle in the header. Watch mode (default) hides scores and winners to avoid spoilers. Stats mode shows all outcome data.
 - **Streaming chat** — Tokens appear in real-time as the LLM generates them
 - **Source cards** — After each response, source citations display as cards with thumbnails, relevance scores, snippets, and YouTube links
 - **Game discovery** — Quick prompt buttons ("Most exciting games", "Greatest comeback", etc.)
@@ -28,6 +29,7 @@ Browser-based chat interface with game discovery, built on top of the [RAG Engin
 - **Google OAuth** — Sign in to reply to YouTube comments directly from RecHoop
 - **Data refresh** — One-click pipeline that re-scrapes hooprec.com, fetches new YouTube data, and re-ingests into ChromaDB with live SSE progress
 - **Add Video** — Paste YouTube URLs on the Add Video page to check if they're in the database, process new videos, and submit match data (see below)
+- **Suggested prompt caching** — When `PRELOAD_SUGGESTIONS=true`, suggested prompt responses are preloaded on startup and cached to disk (`data/db/preload_cache.json`). Cache auto-invalidates when game count changes.
 - **Dark theme** — Basketball aesthetic with orange/amber accents
 
 ## Running It
@@ -45,6 +47,8 @@ Open http://localhost:8000 in your browser.
 | Variable | Default | Description |
 |---|---|---|
 | `RAG_WEB_PORT` | `8000` | Web server port |
+| `SKIP_OLLAMA` | `false` | Disable Ollama transcript cleaning when adding videos via web |
+| `PRELOAD_SUGGESTIONS` | `false` | Preload suggested prompt responses on startup (cached to disk) |
 
 All other settings (LLM model, embeddings, TOP_K, etc.) are shared with the CLI — see [RAG Engine configuration](rag-engine.md#configuration).
 
@@ -54,7 +58,7 @@ The Add Video page (`/add`, linked from the header) lets you manually add videos
 
 1. **Paste URLs** — Enter one or more YouTube URLs into the textarea
 2. **Check** — Videos already in the database show with a green "Already in database ✓" badge and match info
-3. **Process** — Unknown videos are fully processed: metadata, transcript (Ollama cleanup), and comments fetched via SSE streaming
+3. **Process** — Unknown videos are fully processed: metadata, transcript (Ollama cleanup unless `SKIP_OLLAMA=true`), and comments fetched via SSE streaming
 4. **Review** — Pre-filled forms appear one at a time with guessed player names, scores, and date (regex on title first, Ollama LLM fallback). Non-1v1 videos are flagged with a warning.
 5. **Submit** — Confirmed data creates match + player records, updates wins/losses, writes markdown, and auto-ingests into ChromaDB
 
@@ -71,14 +75,14 @@ The Add Video page (`/add`, linked from the header) lets you manually add videos
 
 ```
 rag/web/
-├── app.py             # FastAPI app, SSE streaming, session mgmt, discover routes
-├── db.py              # Direct SQLite queries (games, comments, watch history, discovery)
+├── app.py             # FastAPI app, SSE streaming, session mgmt, add video routes
+├── db.py              # Direct SQLite queries (games, comments, watch history, add video)
 ├── templates/
 │   ├── base.html      # Shell: Tailwind + htmx CDNs, dark theme
 │   ├── index.html     # Landing page + chat (two-state layout)
-│   ├── discover.html  # Video Discovery page (Phase 4.1)
+│   ├── discover.html  # Add Video page (Phase 4.1)
 │   └── partials/      # game_cards, source_cards, comments
 └── static/
     ├── app.js         # SSE streaming, chat UI, source rendering, watch tracking
-    └── discover.js    # Video discovery: URL checking, SSE processing, review forms
+    └── discover.js    # Add Video: URL checking, SSE processing, review forms
 ```

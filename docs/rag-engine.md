@@ -78,6 +78,8 @@ For the browser-based interface, see [Web UI](web-ui.md).
 | `RAG_CONTEXT_WINDOW` | `8192` | LLM context window size |
 | `RAG_LLM_TIMEOUT` | `120` | LLM request timeout (seconds) |
 | `CHROMA_DIR` | `data/db/chroma` | ChromaDB persistent storage path |
+| `SKIP_OLLAMA` | `false` | Disable Ollama transcript cleaning globally |
+| `PRELOAD_SUGGESTIONS` | `false` | Preload suggested prompt responses on web server startup (persisted to disk) |
 
 ## Switching LLM Models
 

@@ -25,14 +25,19 @@ Match stats alone (scores, winner/loser) can't answer questions about *what happ
 ## Running It
 
 ```bash
-cd youtube-ingest
-pip install -r requirements.txt
-python youtube_ingest.py                    # process all matches
-python youtube_ingest.py --limit 50         # first 50 only
-python youtube_ingest.py --video-id ABC123  # single video
-python youtube_ingest.py --skip-ollama      # skip punctuation pass
-python youtube_ingest.py --refresh          # re-fetch metadata + comments only
-python youtube_ingest.py --dry-run          # preview, no writes
+pip install -r youtube-ingest/requirements.txt
+
+# Default: ingest new videos + refresh metadata/comments on existing
+python youtube-ingest/youtube_ingest.py
+
+# Ingest new videos only, skip refreshing existing
+python youtube-ingest/youtube_ingest.py --no-refresh
+
+# Limit to first 10 videos per phase
+python youtube-ingest/youtube_ingest.py --limit 10
+
+# Preview what would be processed without writing anything
+python youtube-ingest/youtube_ingest.py --dry-run
 ```
 
 ## Configuration
@@ -44,6 +49,7 @@ python youtube_ingest.py --dry-run          # preview, no writes
 | `YOUTUBE_MD_DIR` | `data/raw/youtube_md` | Markdown output directory |
 | `OLLAMA_MODEL` | `llama3.1:8b` | Ollama model for transcript cleaning |
 | `OLLAMA_TIMEOUT` | `120` | Seconds before Ollama timeout |
+| `SKIP_OLLAMA` | `false` | Set `true` to disable Ollama transcript cleaning globally (applies to CLI and web Add Video) |
 
 ## Output
 
