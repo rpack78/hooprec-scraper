@@ -103,9 +103,13 @@
             padding: 0.125rem 0.5rem; border-radius: 9999px;
             display: inline-flex; align-items: center; gap: 0.25rem;
         }
+
+        /* Watch mode: hide spoiler elements (scores, winner highlights) */
+        body[data-view-mode="watch"] .spoiler { display: none !important; }
+        body[data-view-mode="watch"] .winner-highlight { color: inherit !important; }
     </style>
 </head>
-<body class="h-full bg-hoop-darker text-gray-100 antialiased">
+<body class="h-full bg-hoop-darker text-gray-100 antialiased" data-view-mode="watch">
     {% block content %}{% endblock %}
 
     <script src="/static/app.js?v={{ cache_bust }}"></script>

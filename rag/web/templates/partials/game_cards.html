@@ -34,13 +34,13 @@
         <div class="flex items-center justify-between gap-2">
             <div class="min-w-0">
                 <h3 class="text-sm font-bold truncate">
-                    <span class="{% if game.winner == game.player1 %}text-hoop-orange{% endif %}">{{ game.player1 }}</span>
+                    <span class="{% if game.winner == game.player1 %}text-hoop-orange winner-highlight{% endif %}">{{ game.player1 }}</span>
                     <span class="text-gray-500 mx-1">vs</span>
-                    <span class="{% if game.winner == game.player2 %}text-hoop-orange{% endif %}">{{ game.player2 }}</span>
+                    <span class="{% if game.winner == game.player2 %}text-hoop-orange winner-highlight{% endif %}">{{ game.player2 }}</span>
                 </h3>
             </div>
             {% if game.player1_score is not none and game.player2_score is not none %}
-            <span class="text-xs font-mono bg-hoop-darker px-2 py-0.5 rounded whitespace-nowrap">
+            <span class="spoiler text-xs font-mono bg-hoop-darker px-2 py-0.5 rounded whitespace-nowrap">
                 {{ game.player1_score }}-{{ game.player2_score }}
             </span>
             {% endif %}

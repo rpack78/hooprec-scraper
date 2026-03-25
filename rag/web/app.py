@@ -508,6 +508,7 @@ async def chat(request: Request):
     """Stream a chat response via Server-Sent Events."""
     body = await request.json()
     message = body.get("message", "").strip()
+    view_mode = body.get("view_mode", "watch")  # "watch" or "stats"
     if not message:
         return Response(status_code=400, content="Empty message")
 
@@ -551,13 +552,13 @@ async def chat(request: Request):
                     note = f"⚡ {route_label}"
                     yield f"event: route\ndata: {json.dumps(note)}\n\n"
 
-                    # Scores reveal the winner, so only show any outcome details
-                    # when the user explicitly asks for them.
+                    # Scores reveal the winner — in watch mode always hide,
+                    # in stats mode show, and also show if the user explicitly asks.
                     _OUTCOME_KW = re.compile(
                         r"\b(who\s+won|winner|win|wins|record|results?|W-L|losses?|scores?|final)\b",
                         re.IGNORECASE,
                     )
-                    show_outcome = bool(_OUTCOME_KW.search(message))
+                    show_outcome = view_mode == "stats" or bool(_OUTCOME_KW.search(message))
 
                     from rag.web.db import get_player_games
                     db_games = get_player_games(players, limit=50)
@@ -636,7 +637,15 @@ async def chat(request: Request):
                 yield f"event: route\ndata: {json.dumps(note)}\n\n"
 
             # Run the query
-            response = await asyncio.to_thread(engine.query, message)
+            query_text = message
+            if view_mode == "watch":
+                query_text = (
+                    message
+                    + "\n\n[IMPORTANT: The user is in spoiler-free Watch mode. "
+                    "Do NOT reveal final scores, winners, or outcomes. "
+                    "Focus on describing the matchup, atmosphere, and why it's worth watching.]"
+                )
+            response = await asyncio.to_thread(engine.query, query_text)
             text = str(response)
             for i in range(0, len(text), 20):
                 chunk = text[i : i + 20]

@@ -18,11 +18,15 @@ let messageSourceCache = new Map(); // assistant wrapper DOM el -> cards array
 let activeSourceMessage = null;      // currently highlighted assistant message
 let currentAssistantWrapper = null;  // wrapper being streamed into
 let currentResponseCards = [];       // cards streamed for the active assistant response
+let viewMode = 'watch';              // 'watch' (no spoilers) or 'stats' (show scores/winners)
 
 // Load watched state and auth status on page load
 document.addEventListener('DOMContentLoaded', () => {
     loadWatchedState();
     checkAuthStatus();
+    // Restore view mode preference
+    const saved = localStorage.getItem('viewMode');
+    if (saved === 'watch' || saved === 'stats') setViewMode(saved);
     window.addEventListener('message', (e) => {
         if (e.data && e.data.type === 'oauth_complete') {
             checkAuthStatus();
@@ -160,7 +164,7 @@ function sendMessage(message) {
     fetch('/api/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message }),
+        body: JSON.stringify({ message, view_mode: viewMode }),
     }).then(response => {
         const reader = response.body.getReader();
         const decoder = new TextDecoder();
@@ -478,6 +482,22 @@ function setMode(mode) {
         btn.classList.add('text-gray-400', 'hover:text-white');
     });
     const active = document.getElementById(`mode-${mode}`);
+    if (active) {
+        active.classList.add('bg-hoop-orange', 'text-white');
+        active.classList.remove('text-gray-400', 'hover:text-white');
+    }
+}
+
+function setViewMode(mode) {
+    viewMode = mode;
+    localStorage.setItem('viewMode', mode);
+    document.body.setAttribute('data-view-mode', mode);
+    // Update toggle button styles
+    document.querySelectorAll('.vm-btn').forEach(btn => {
+        btn.classList.remove('bg-hoop-orange', 'text-white');
+        btn.classList.add('text-gray-400', 'hover:text-white');
+    });
+    const active = document.getElementById(`vm-${mode}`);
     if (active) {
         active.classList.add('bg-hoop-orange', 'text-white');
         active.classList.remove('text-gray-400', 'hover:text-white');
