@@ -112,7 +112,7 @@ _STATS_KEYWORDS = re.compile(
 _LIST_KEYWORDS = re.compile(
     r"\b(all\s+(the\s+)?games|every\s+game|chronological|"
     r"in\s+order|list\s+(all|every|the)|full\s+list|show\s+me\s+all|"
-    r"show\s+me\s+games|games?\s+(featuring|with|of))\b",
+    r"show\s+me\s+(games|videos)|(?:games?|videos?)\s+(featuring|with|of))\b",
     re.IGNORECASE,
 )
 
