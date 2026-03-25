@@ -1051,7 +1051,7 @@ async def ingest_refresh():
 
 
 # ---------------------------------------------------------------------------
-# Video Discovery (Phase 4.1)
+# Add Video (Phase 4.1)
 # ---------------------------------------------------------------------------
 
 _YT_ID_PATTERNS = [
@@ -1155,13 +1155,13 @@ def _guess_match_info(title: str, transcript: str | None, published_at: str | No
     return info
 
 
-@app.get("/discover", response_class=HTMLResponse)
-async def discover_page(request: Request):
+@app.get("/add", response_class=HTMLResponse)
+async def add_video_page(request: Request):
     return templates.TemplateResponse("discover.html", {"request": request})
 
 
-@app.post("/api/discover/check")
-async def discover_check(request: Request):
+@app.post("/api/add/check")
+async def add_check(request: Request):
     """Check which video IDs are already in the database."""
     body = await request.json()
     raw_text = body.get("urls", "")
@@ -1184,8 +1184,8 @@ async def discover_check(request: Request):
     return {"known": known, "unknown": unknown, "invalid": False}
 
 
-@app.post("/api/discover/process")
-async def discover_process(request: Request):
+@app.post("/api/add/process")
+async def add_process(request: Request):
     """Process unknown videos: fetch metadata, transcript, comments.
     Returns SSE stream with progress and guessed match info."""
     body = await request.json()
@@ -1302,9 +1302,9 @@ async def discover_process(request: Request):
     )
 
 
-@app.post("/api/discover/submit")
-async def discover_submit(request: Request):
-    """Submit user-corrected match data for a discovered video."""
+@app.post("/api/add/submit")
+async def add_submit(request: Request):
+    """Submit user-corrected match data for a new video."""
     body = await request.json()
     vid = body.get("video_id", "").strip()
     player1 = body.get("player1_name", "").strip()

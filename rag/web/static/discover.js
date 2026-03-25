@@ -1,5 +1,5 @@
 /**
- * discover.js — Client-side logic for the Video Discovery page.
+ * discover.js — Client-side logic for the Add Video page.
  *
  * Handles URL checking, SSE processing progress, and review form workflow.
  */
@@ -32,7 +32,7 @@ function checkVideos() {
     status.textContent = 'Checking...';
     status.className = 'text-xs text-gray-400';
 
-    fetch('/api/discover/check', {
+    fetch('/api/add/check', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ urls: raw }),
@@ -133,7 +133,7 @@ function processUnknownVideos(videoIds) {
     }
 
     // Start SSE
-    fetch('/api/discover/process', {
+    fetch('/api/add/process', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ video_ids: videoIds }),
@@ -363,7 +363,7 @@ function submitForm(videoId) {
         match_date: document.getElementById('form-date').value || null,
     };
 
-    fetch('/api/discover/submit', {
+    fetch('/api/add/submit', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),
@@ -409,7 +409,7 @@ function showDone() {
     document.getElementById('done-summary').textContent = parts.join(' · ') || 'No videos to process.';
 }
 
-function resetDiscover() {
+function resetAddVideo() {
     // Reset state
     pendingResults = [];
     currentFormIndex = 0;

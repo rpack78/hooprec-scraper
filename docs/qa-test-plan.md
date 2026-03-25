@@ -23,7 +23,7 @@
 | 1.2 | Game cards display | Each card shows: thumbnail, player names, score, date, view count, channel icon | ✅ |
 | 1.3 | Suggested prompts | Four prompt buttons visible (Most exciting, Greatest comeback, Best player, Best trash talk) | ✅ |
 | 1.4 | Chat input | Text input + Send button visible at bottom | ✅ |
-| 1.5 | Nav bar | Discover, Refresh Data, Auto/Vector/SQL mode toggles, Clear, Sign In visible | ✅ |
+| 1.5 | Nav bar | Add Video, Refresh Data, Auto/Vector/SQL mode toggles, Clear, Sign In visible | ✅ |
 | 1.6 | "VIDEOS YOU MAY LIKE" sidebar | Right sidebar shows video suggestions | ✅ |
 
 ---
@@ -75,16 +75,16 @@
 
 ---
 
-## 6. Discover Page (`GET /discover`)
+## 6. Add Video Page (`GET /add`)
 
 | # | Test | Expected | Status |
 |---|------|----------|--------|
-| 6.1 | Load discover page | Page renders with URL input area and "Check Videos" button | ✅ |
+| 6.1 | Load Add Video page | Page renders with URL input area and "Check Videos" button | ✅ |
 | 6.2 | Check known video URL | Returns `{"known": [{match details}], "unknown": []}` | ✅ |
 | 6.3 | Check unknown video URL | Returns `{"known": [], "unknown": ["VIDEO_ID"]}` | ✅ |
 | 6.4 | Check invalid URL | Returns `{"invalid": true}` | ✅ |
 | 6.5 | Send URLs as array (API) | Coerced to string, works correctly | ✅ (was 🐛) |
-| 6.6 | Submit a discovered video | Creates match + player records, ingests into ChromaDB | |
+| 6.6 | Submit a new video | Creates match + player records, ingests into ChromaDB | |
 
 **Bug found & fixed (6.5):** `TypeError: expected string or bytes-like object, got 'list'` — endpoint crashed if `urls` was sent as a JSON array instead of string. Added type coercion guard.
 
@@ -141,8 +141,8 @@
   2. `rag/web/app.py` — Added `_warmup_ollama()` startup task (loads model before first query)
   3. `rag/web/app.py` — User-friendly timeout error message
 
-### BUG-002: Discover Check Crashes on Array Input
-- **Symptom:** 500 Internal Server Error on `POST /api/discover/check` when `urls` is a JSON array
+### BUG-002: Add Video Check Crashes on Array Input
+- **Symptom:** 500 Internal Server Error on `POST /api/add/check` when `urls` is a JSON array
 - **Root Cause:** `_extract_video_ids_from_text()` expects a string but received a list
 - **File changed:** `rag/web/app.py` — Added `isinstance(raw_text, list)` guard to join array into string
 

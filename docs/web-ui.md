@@ -27,7 +27,7 @@ Browser-based chat interface with game discovery, built on top of the [RAG Engin
 - **Watch tracking** — Persistent watch history with green badges showing when you watched each video
 - **Google OAuth** — Sign in to reply to YouTube comments directly from RecHoop
 - **Data refresh** — One-click pipeline that re-scrapes hooprec.com, fetches new YouTube data, and re-ingests into ChromaDB with live SSE progress
-- **Video Discovery** — Paste YouTube URLs on the Discover page to check if they're in the database, process new videos, and submit match data (see below)
+- **Add Video** — Paste YouTube URLs on the Add Video page to check if they're in the database, process new videos, and submit match data (see below)
 - **Dark theme** — Basketball aesthetic with orange/amber accents
 
 ## Running It
@@ -48,9 +48,9 @@ Open http://localhost:8000 in your browser.
 
 All other settings (LLM model, embeddings, TOP_K, etc.) are shared with the CLI — see [RAG Engine configuration](rag-engine.md#configuration).
 
-## Video Discovery (Phase 4.1)
+## Add Video (Phase 4.1)
 
-The Discover page (`/discover`, linked from the header) lets you manually add videos that the hooprec.com scraper may have missed.
+The Add Video page (`/add`, linked from the header) lets you manually add videos that the hooprec.com scraper may have missed.
 
 1. **Paste URLs** — Enter one or more YouTube URLs into the textarea
 2. **Check** — Videos already in the database show with a green "Already in database ✓" badge and match info
@@ -62,10 +62,10 @@ The Discover page (`/discover`, linked from the header) lets you manually add vi
 
 | Route | Method | Description |
 |---|---|---|
-| `/discover` | GET | Discover page |
-| `/api/discover/check` | POST | Check which video IDs exist in DB |
-| `/api/discover/process` | POST | Process unknown videos (SSE stream) |
-| `/api/discover/submit` | POST | Submit user-corrected match data |
+| `/add` | GET | Add Video page |
+| `/api/add/check` | POST | Check which video IDs exist in DB |
+| `/api/add/process` | POST | Process unknown videos (SSE stream) |
+| `/api/add/submit` | POST | Submit user-corrected match data |
 
 ## Project Structure
 

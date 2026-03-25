@@ -121,16 +121,16 @@ hooprec-scraper/
 │   ├── tests/
 │   │   └── test_ingest.py
 │   └── web/
-│       ├── app.py                 # FastAPI routes inc. chat, watch, OAuth, discover
-│       ├── db.py                  # SQLite queries inc. discovery + player linking
+│       ├── app.py                 # FastAPI routes inc. chat, watch, OAuth, add video
+│       ├── db.py                  # SQLite queries inc. add-video + player linking
 │       ├── templates/
 │       │   ├── base.html
 │       │   ├── index.html
-│       │   ├── discover.html          # Video Discovery page (Phase 4.1)
+│       │   ├── discover.html          # Add Video page (Phase 4.1)
 │       │   └── partials/
 │       └── static/
 │           ├── app.js
-│           └── discover.js            # Video discovery JS
+│           └── discover.js            # Add Video page JS
 ├── docs/                          # Documentation
 └── README.md
 ```
