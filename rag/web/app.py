@@ -65,7 +65,6 @@ STATIC_DIR = WEB_DIR / "static"
 async def lifespan(app: FastAPI):
     ensure_web_tables()
     asyncio.create_task(_warmup_ollama())
-    asyncio.create_task(_preload_suggested())
     yield
 
 
