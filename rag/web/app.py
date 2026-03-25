@@ -65,6 +65,9 @@ STATIC_DIR = WEB_DIR / "static"
 async def lifespan(app: FastAPI):
     ensure_web_tables()
     asyncio.create_task(_warmup_ollama())
+    from rag.config import PRELOAD_SUGGESTIONS
+    if PRELOAD_SUGGESTIONS:
+        asyncio.create_task(_preload_suggested())
     yield
 
 
@@ -413,6 +416,44 @@ _CHANNEL_ICONS: dict[str, str] = {
 # ---------------------------------------------------------------------------
 
 _preload_started = False
+_PRELOAD_CACHE_FILE = Path(__file__).parent.parent.parent / "data" / "db" / "preload_cache.json"
+
+
+def _load_preload_cache() -> bool:
+    """Load cached suggestions from disk. Returns True if cache is valid."""
+    if not _PRELOAD_CACHE_FILE.exists():
+        return False
+    try:
+        data = json.loads(_PRELOAD_CACHE_FILE.read_text(encoding="utf-8"))
+        # Invalidate if game count changed (new data was ingested)
+        stored_count = data.get("game_count", 0)
+        current_count = get_game_count()
+        if stored_count != current_count:
+            log.info("Preload cache stale (games: %d → %d), regenerating", stored_count, current_count)
+            return False
+        entries = data.get("entries", {})
+        for prompt_text in _SUGGESTED_PROMPTS:
+            if prompt_text in entries:
+                _preloaded_cache[prompt_text] = entries[prompt_text]
+        log.info("Loaded %d cached suggestions from disk", len(_preloaded_cache))
+        return len(_preloaded_cache) == len(_SUGGESTED_PROMPTS)
+    except Exception as e:
+        log.warning("Failed to load preload cache: %s", e)
+        return False
+
+
+def _save_preload_cache() -> None:
+    """Persist preloaded suggestions to disk."""
+    try:
+        data = {
+            "game_count": get_game_count(),
+            "entries": {k: v for k, v in _preloaded_cache.items() if k in _SUGGESTED_PROMPTS},
+        }
+        _PRELOAD_CACHE_FILE.parent.mkdir(parents=True, exist_ok=True)
+        _PRELOAD_CACHE_FILE.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+        log.info("Saved preload cache to disk (%d entries)", len(data["entries"]))
+    except Exception as e:
+        log.warning("Failed to save preload cache: %s", e)
 
 
 async def _preload_suggested():
@@ -421,6 +462,10 @@ async def _preload_suggested():
     if _preload_started:
         return
     _preload_started = True
+
+    # Try loading from disk first
+    if _load_preload_cache():
+        return
 
     log.info("Preloading %d suggested prompts in background…", len(_SUGGESTED_PROMPTS))
     for prompt_text in _SUGGESTED_PROMPTS:
@@ -438,6 +483,7 @@ async def _preload_suggested():
             log.warning("  Failed to preload '%s': %s", prompt_text[:40], e)
 
     log.info("Preloading complete (%d/%d cached)", len(_preloaded_cache), len(_SUGGESTED_PROMPTS))
+    _save_preload_cache()
 
 
 async def _warmup_ollama():
@@ -1254,9 +1300,14 @@ async def add_process(request: Request):
                 raw_text, segments = fetch_transcript(vid)
                 cleaned_text = None
                 if raw_text:
-                    yield f"event: progress\ndata: {json.dumps({'video_id': vid, 'status': 'processing', 'message': 'Cleaning transcript with Ollama...'})}\n\n"
-                    await asyncio.sleep(0)
-                    cleaned_text = await asyncio.to_thread(clean_transcript, raw_text)
+                    from rag.config import SKIP_OLLAMA
+                    if SKIP_OLLAMA:
+                        yield f"event: progress\ndata: {json.dumps({'video_id': vid, 'status': 'processing', 'message': 'Storing raw transcript (Ollama cleaning disabled)...'})}\n\n"
+                        cleaned_text = raw_text
+                    else:
+                        yield f"event: progress\ndata: {json.dumps({'video_id': vid, 'status': 'processing', 'message': 'Cleaning transcript with Ollama...'})}\n\n"
+                        await asyncio.sleep(0)
+                        cleaned_text = await asyncio.to_thread(clean_transcript, raw_text)
 
                 upsert_transcript(conn, vid, raw_text, cleaned_text, segments)
 

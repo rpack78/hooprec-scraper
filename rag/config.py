@@ -54,6 +54,12 @@ CONTEXT_WINDOW = int(os.getenv("RAG_CONTEXT_WINDOW", "8192"))
 CHROMA_COLLECTION = os.getenv("RAG_CHROMA_COLLECTION", "hooprec_youtube")
 
 # ---------------------------------------------------------------------------
+# Feature flags
+# ---------------------------------------------------------------------------
+SKIP_OLLAMA = os.getenv("SKIP_OLLAMA", "false").lower() in ("1", "true", "yes")
+PRELOAD_SUGGESTIONS = os.getenv("PRELOAD_SUGGESTIONS", "false").lower() in ("1", "true", "yes")
+
+# ---------------------------------------------------------------------------
 # Google OAuth 2.0 (for YouTube commenting)
 # ---------------------------------------------------------------------------
 GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID", "")

@@ -536,74 +536,79 @@ def refresh_video(
     log.info("  Markdown refreshed: %s", md_path)
 
 
+def _get_skip_ollama() -> bool:
+    """Read the global SKIP_OLLAMA flag from the shared config."""
+    try:
+        sys.path.insert(0, str(_PROJECT_ROOT / "rag"))
+        from config import SKIP_OLLAMA
+        return SKIP_OLLAMA
+    except Exception:
+        return os.getenv("SKIP_OLLAMA", "false").lower() in ("1", "true", "yes")
+
+
 def main() -> None:
-    parser = argparse.ArgumentParser(description="YouTube ingest for HoopRec matches")
-    parser.add_argument("--limit",        type=int, default=0,     help="Process at most N videos (0 = all)")
-    parser.add_argument("--video-id",     type=str, default=None,  help="Process a single video ID")
-    parser.add_argument("--skip-ollama",  action="store_true",     help="Skip the Ollama punctuation pass")
-    parser.add_argument("--dry-run",      action="store_true",     help="Preview without writing anything")
-    parser.add_argument("--refresh",       action="store_true",     help="Re-fetch metadata + comments for already-ingested videos")
+    parser = argparse.ArgumentParser(
+        description="YouTube ingest for HoopRec matches",
+        epilog="Default (no flags): ingest new videos + refresh existing.",
+    )
+    parser.add_argument("--no-refresh",  action="store_true",  help="Ingest only new videos, skip refreshing existing")
+    parser.add_argument("--limit",       type=int, default=0,  help="Process at most N videos (0 = all)")
+    parser.add_argument("--dry-run",     action="store_true",  help="Preview without writing anything")
     args = parser.parse_args()
 
     if not YOUTUBE_API_KEY:
         log.error("YOUTUBE_API_KEY not set. Create a .env file in the project root.")
         sys.exit(1)
 
+    skip_ollama = _get_skip_ollama()
+    if skip_ollama:
+        log.info("SKIP_OLLAMA=true — transcript cleaning disabled")
+
     conn = init_db()
     service = _build_youtube_service()
 
-    # Pick the right handler
-    handler = refresh_video if args.refresh else process_video
-    handler_kwargs: dict = {"dry_run": args.dry_run}
-    if not args.refresh:
-        handler_kwargs["skip_ollama"] = args.skip_ollama
+    matches = get_matches_with_youtube(conn)
+    total = len(matches)
+    log.info("Found %d matches with YouTube links", total)
 
-    if args.video_id:
-        # Single-video mode
-        row = conn.execute(
-            "SELECT id, match_id, player1_name, player2_name, youtube_url, youtube_video_id, match_date "
-            "FROM matches WHERE youtube_video_id = ?",
-            (args.video_id,),
-        ).fetchone()
-        if not row:
-            log.error("No match found with youtube_video_id = %s", args.video_id)
-            conn.close()
-            sys.exit(1)
-        cols = ["row_id", "match_id", "player1_name", "player2_name",
-                "youtube_url", "youtube_video_id", "match_date"]
-        match = dict(zip(cols, row))
-        handler(conn, service, match, **handler_kwargs)
-    else:
-        matches = get_matches_with_youtube(conn)
-        total = len(matches)
-        log.info("Found %d matches with YouTube links", total)
+    # --- Phase 1: Ingest new (unprocessed) videos ---
+    new_pending = []
+    for m in matches:
+        vid = m.get("youtube_video_id") or extract_video_id(m.get("youtube_url", "") or "")
+        if vid and get_progress(conn, f"yt_video:{vid}"):
+            continue
+        new_pending.append(m)
+    log.info("New videos to ingest: %d  |  Already done: %d", len(new_pending), total - len(new_pending))
 
-        if args.refresh:
-            # Refresh mode: only videos that have already been ingested
-            pending = []
-            for m in matches:
-                vid = m.get("youtube_video_id") or extract_video_id(m.get("youtube_url", "") or "")
-                if vid and get_progress(conn, f"yt_video:{vid}"):
-                    pending.append(m)
-            log.info("Videos to refresh: %d", len(pending))
-        else:
-            # Normal mode: filter out already-checkpointed videos
-            pending = []
-            for m in matches:
-                vid = m.get("youtube_video_id") or extract_video_id(m.get("youtube_url", "") or "")
-                if vid and get_progress(conn, f"yt_video:{vid}"):
-                    continue
-                pending.append(m)
-            log.info("Already done: %d  |  Pending: %d", total - len(pending), len(pending))
+    if args.limit and new_pending:
+        new_pending = new_pending[: args.limit]
+        log.info("Limited new videos to %d", len(new_pending))
 
-        if args.limit:
-            pending = pending[: args.limit]
-            log.info("Limited to %d videos", len(pending))
+    for i, m in enumerate(new_pending, 1):
+        log.info("=== NEW [%d / %d] ===", i, len(new_pending))
+        try:
+            process_video(conn, service, m, skip_ollama=skip_ollama, dry_run=args.dry_run)
+        except Exception as exc:
+            log.error("Failed on match %s: %s", m["match_id"], exc, exc_info=True)
+            continue
 
-        for i, m in enumerate(pending, 1):
-            log.info("=== [%d / %d] ===", i, len(pending))
+    # --- Phase 2: Refresh existing videos (unless --no-refresh) ---
+    if not args.no_refresh:
+        refresh_pending = []
+        for m in matches:
+            vid = m.get("youtube_video_id") or extract_video_id(m.get("youtube_url", "") or "")
+            if vid and get_progress(conn, f"yt_video:{vid}"):
+                refresh_pending.append(m)
+        log.info("Videos to refresh: %d", len(refresh_pending))
+
+        if args.limit and refresh_pending:
+            refresh_pending = refresh_pending[: args.limit]
+            log.info("Limited refresh to %d", len(refresh_pending))
+
+        for i, m in enumerate(refresh_pending, 1):
+            log.info("=== REFRESH [%d / %d] ===", i, len(refresh_pending))
             try:
-                handler(conn, service, m, **handler_kwargs)
+                refresh_video(conn, service, m, dry_run=args.dry_run)
             except Exception as exc:
                 log.error("Failed on match %s: %s", m["match_id"], exc, exc_info=True)
                 continue
