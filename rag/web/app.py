@@ -67,6 +67,7 @@ STATIC_DIR = WEB_DIR / "static"
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     ensure_web_tables()
+    _load_player_names()          # always — no Ollama needed
     asyncio.create_task(_warmup_ollama())
     from rag.config import PRELOAD_SUGGESTIONS
     if PRELOAD_SUGGESTIONS:
@@ -230,6 +231,23 @@ def _build_player_aliases(player_names: list[str]) -> dict[str, list[str]]:
     return {alias: sorted(names, key=len, reverse=True) for alias, names in aliases.items()}
 
 
+def _load_player_names():
+    """Load player names and aliases from SQLite — no Ollama needed.
+    Called eagerly on startup so fast DB paths work immediately."""
+    global _player_names, _player_aliases
+    import sqlite3
+    from rag.config import DB_PATH
+    try:
+        conn = sqlite3.connect(str(DB_PATH))
+        rows = conn.execute("SELECT name FROM players ORDER BY LENGTH(name) DESC").fetchall()
+        _player_names = [r[0] for r in rows]
+        _player_aliases = _build_player_aliases(_player_names)
+        conn.close()
+        log.warning("Loaded %d players and %d aliases", len(_player_names), len(_player_aliases))
+    except Exception:
+        log.warning("Could not load player names — smart routing disabled")
+
+
 def _init_engines():
     """Lazily initialize the query engines on first request."""
     global _engines_ready, _vector_index, _vector_engine, _sql_engine, _player_names, _player_aliases
@@ -248,19 +266,6 @@ def _init_engines():
     _vector_index = build_vector_query_engine()
     _vector_engine = get_vector_query_engine(_vector_index)
     _sql_engine = get_sql_query_engine()
-
-    # Load player names for smart routing
-    import sqlite3
-    from rag.config import DB_PATH
-    try:
-        conn = sqlite3.connect(str(DB_PATH))
-        rows = conn.execute("SELECT name FROM players ORDER BY LENGTH(name) DESC").fetchall()
-        _player_names = [r[0] for r in rows]
-        _player_aliases = _build_player_aliases(_player_names)
-        conn.close()
-        log.info("Loaded %d player names for smart routing", len(_player_names))
-    except Exception:
-        log.warning("Could not load player names — smart routing disabled")
 
     _engines_ready = True
 
@@ -953,10 +958,7 @@ async def delete_alias(request: Request):
 
 def _reload_aliases():
     """Rebuild the player alias lookup after a DB change."""
-    global _player_aliases
-    if _player_names:
-        _player_aliases = _build_player_aliases(_player_names)
-        log.warning("Reloaded player aliases (%d entries)", len(_player_aliases))
+    _load_player_names()
 
 
 # ---------------------------------------------------------------------------
