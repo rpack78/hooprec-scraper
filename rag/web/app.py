@@ -44,6 +44,9 @@ from rag.web.db import (
     video_exists,
     get_match_by_video_id,
     create_match_from_discovery,
+    get_player_aliases,
+    add_player_alias,
+    remove_player_alias,
 )
 
 logging.basicConfig(
@@ -143,11 +146,8 @@ _ALIAS_STOPWORDS = {
     "show", "stats", "the", "to", "vs", "what", "who", "will",
 }
 
-# Manual aliases for community nicknames that can't be auto-resolved.
-# Maps normalized nickname → canonical DB name(s).
-_MANUAL_ALIASES: dict[str, list[str]] = {
-    "nas": ["Nasir Core"],
-}
+# Manual aliases are now stored in the player_aliases DB table.
+# Use the /api/aliases endpoints to manage them.
 
 
 def _normalize_player_text(text: str) -> str:
@@ -222,8 +222,9 @@ def _build_player_aliases(player_names: list[str]) -> dict[str, list[str]]:
             ):
                 aliases.setdefault(token_norm, set()).add(name)
 
-    # Merge manual aliases (override auto-detected ones for these keys)
-    for alias_key, canonical_names in _MANUAL_ALIASES.items():
+    # Merge DB-stored aliases (override auto-detected ones for these keys)
+    db_aliases = get_player_aliases()
+    for alias_key, canonical_names in db_aliases.items():
         aliases[alias_key] = set(canonical_names)
 
     return {alias: sorted(names, key=len, reverse=True) for alias, names in aliases.items()}
@@ -910,6 +911,52 @@ async def chat_mode(request: Request, mode: str):
     session = _get_session(request)
     session["mode"] = mode
     return {"status": "ok", "mode": mode}
+
+
+# ---------------------------------------------------------------------------
+# Player aliases
+# ---------------------------------------------------------------------------
+
+@app.get("/api/aliases")
+async def list_aliases():
+    """Return all player aliases."""
+    return get_player_aliases()
+
+
+@app.post("/api/aliases")
+async def create_alias(request: Request):
+    """Add a player alias. Body: {"alias": "...", "player_name": "..."}."""
+    body = await request.json()
+    alias = body.get("alias", "").strip()
+    player_name = body.get("player_name", "").strip()
+    if not alias or not player_name:
+        return Response(status_code=400, content="Both alias and player_name are required")
+    added = add_player_alias(alias, player_name)
+    if added:
+        _reload_aliases()
+    return {"status": "ok", "added": added, "alias": alias, "player_name": player_name}
+
+
+@app.delete("/api/aliases")
+async def delete_alias(request: Request):
+    """Remove a player alias. Body: {"alias": "...", "player_name": "..."}."""
+    body = await request.json()
+    alias = body.get("alias", "").strip()
+    player_name = body.get("player_name", "").strip()
+    if not alias or not player_name:
+        return Response(status_code=400, content="Both alias and player_name are required")
+    removed = remove_player_alias(alias, player_name)
+    if removed:
+        _reload_aliases()
+    return {"status": "ok", "removed": removed}
+
+
+def _reload_aliases():
+    """Rebuild the player alias lookup after a DB change."""
+    global _player_aliases
+    if _player_names:
+        _player_aliases = _build_player_aliases(_player_names)
+        log.warning("Reloaded player aliases (%d entries)", len(_player_aliases))
 
 
 # ---------------------------------------------------------------------------

@@ -41,6 +41,13 @@ def ensure_web_tables():
                 email         TEXT,
                 updated_at    TEXT NOT NULL DEFAULT (datetime('now'))
             );
+
+            CREATE TABLE IF NOT EXISTS player_aliases (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                alias       TEXT NOT NULL,
+                player_name TEXT NOT NULL,
+                UNIQUE(alias, player_name)
+            );
         """)
         conn.commit()
     finally:
@@ -175,6 +182,51 @@ def get_player_games(player_names: list[str], limit: int = 20) -> list[dict]:
             (*params, limit),
         ).fetchall()
         return [dict(r) for r in rows]
+    finally:
+        conn.close()
+
+
+# ── Player Aliases ────────────────────────────────────────────
+
+def get_player_aliases() -> dict[str, list[str]]:
+    """Return all aliases as {normalized_alias: [player_name, ...]}."""
+    conn = _connect()
+    try:
+        rows = conn.execute(
+            "SELECT alias, player_name FROM player_aliases ORDER BY alias"
+        ).fetchall()
+        result: dict[str, list[str]] = {}
+        for r in rows:
+            result.setdefault(r["alias"].lower(), []).append(r["player_name"])
+        return result
+    finally:
+        conn.close()
+
+
+def add_player_alias(alias: str, player_name: str) -> bool:
+    """Add an alias for a player. Returns True if inserted, False if duplicate."""
+    conn = _connect()
+    try:
+        conn.execute(
+            "INSERT OR IGNORE INTO player_aliases (alias, player_name) VALUES (?, ?)",
+            (alias.strip().lower(), player_name.strip()),
+        )
+        conn.commit()
+        return conn.total_changes > 0
+    finally:
+        conn.close()
+
+
+def remove_player_alias(alias: str, player_name: str) -> bool:
+    """Remove an alias. Returns True if deleted."""
+    conn = _connect()
+    try:
+        cur = conn.execute(
+            "DELETE FROM player_aliases WHERE alias = ? AND player_name = ?",
+            (alias.strip().lower(), player_name.strip()),
+        )
+        conn.commit()
+        return cur.rowcount > 0
     finally:
         conn.close()
 
