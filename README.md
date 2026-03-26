@@ -39,6 +39,22 @@ python -m rag.cli                 # interactive CLI
 python -m rag.web                 # web UI at localhost:8000
 ```
 
+## Applying Configuration Changes
+
+If you change `.env` settings like `SKIP_OLLAMA=true` or `PRELOAD_SUGGESTIONS=true`, you need to reprocess the affected data:
+
+```bash
+# 1. Refresh YouTube markdown (Applies SKIP_OLLAMA)
+python youtube-ingest/youtube_ingest.py
+
+# 2. Re-embed vector data (Wipes old embeddings and re-ingests)
+python -m rag.ingest --reset
+
+# 3. Regenerate the Preload Cache (Applies PRELOAD_SUGGESTIONS on startup)
+python -m rag.web
+```
+*(Note: To force the web suggestion cache to regenerate without a change in game count, manually delete `data/db/preload_cache.json` before starting the server).*
+
 ## Tech Stack
 
 | Layer | Tools |
