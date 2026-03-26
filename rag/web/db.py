@@ -179,6 +179,99 @@ def get_player_games(player_names: list[str], limit: int = 20) -> list[dict]:
         conn.close()
 
 
+def get_player_stats(player_name: str) -> dict | None:
+    """Return overall stats for a single player."""
+    conn = _connect()
+    try:
+        row = conn.execute(
+            """
+            SELECT p.name, p.wins, p.losses, p.wins + p.losses AS total_games
+            FROM players p
+            WHERE p.name = ?
+            """,
+            (player_name,)
+        ).fetchone()
+        return dict(row) if row else None
+    finally:
+        conn.close()
+
+
+def get_head_to_head(player_a: str, player_b: str) -> dict:
+    """Return head-to-head record and game count between two players."""
+    conn = _connect()
+    try:
+        # We need to find how many times A beat B and B beat A
+        row = conn.execute(
+            """
+            SELECT
+                SUM(CASE WHEN winner_name = ? THEN 1 ELSE 0 END) AS a_wins,
+                SUM(CASE WHEN winner_name = ? THEN 1 ELSE 0 END) AS b_wins,
+                COUNT(*) AS total_games
+            FROM matches
+            WHERE (player1_name = ? AND player2_name = ?)
+               OR (player1_name = ? AND player2_name = ?)
+            """,
+            (player_a, player_b, player_a, player_b, player_b, player_a)
+        ).fetchone()
+        
+        return {
+            "player_a": player_a,
+            "player_b": player_b,
+            "a_wins": row["a_wins"] or 0,
+            "b_wins": row["b_wins"] or 0,
+            "total_games": row["total_games"] or 0
+        }
+    finally:
+        conn.close()
+
+
+def get_leaderboard(category: str, limit: int = 10) -> list[dict]:
+    """Return a ranked leaderboard.
+
+    Categories: most_wins, best_record, most_games, most_losses, most_viewed.
+    """
+    conn = _connect()
+    try:
+        if category == "most_viewed":
+            rows = conn.execute(
+                """
+                SELECT
+                    m.player1_name, m.player2_name,
+                    yv.title, yv.view_count, yv.channel_name,
+                    m.youtube_video_id AS video_id, m.youtube_url, m.match_date
+                FROM youtube_videos yv
+                JOIN matches m ON m.youtube_video_id = yv.video_id
+                ORDER BY yv.view_count DESC
+                LIMIT ?
+                """,
+                (limit,),
+            ).fetchall()
+            return [dict(r) for r in rows]
+
+        col_map = {
+            "most_wins": "wins DESC",
+            "most_losses": "losses DESC",
+            "most_games": "(wins + losses) DESC",
+            "best_record": "CASE WHEN wins + losses >= 3 THEN 1.0 * wins / (wins + losses) ELSE 0 END DESC",
+        }
+        order = col_map.get(category, "wins DESC")
+        min_games = "AND wins + losses >= 3" if category == "best_record" else ""
+        rows = conn.execute(
+            f"""
+            SELECT name, wins, losses, wins + losses AS total_games,
+                   ROUND(100.0 * wins / MAX(wins + losses, 1), 1) AS win_pct
+            FROM players
+            WHERE wins + losses > 0 {min_games}
+            ORDER BY {order}
+            LIMIT ?
+            """,
+            (limit,),
+        ).fetchall()
+        return [dict(r) for r in rows]
+    finally:
+        conn.close()
+
+
 # ── Watch History ─────────────────────────────────────────────
 
 def mark_watched(video_id: str, watched_at: str | None = None) -> dict:

@@ -118,6 +118,25 @@ _LIST_KEYWORDS = re.compile(
     re.IGNORECASE,
 )
 
+# Fast path for simple DB records (player stats, h2h, leaderboards)
+_PLAYER_STATS_KW = re.compile(
+    r"\b(how many (games?|times|wins|loss)|"
+    r"record|stats|win (rate|percentage|pct)|"
+    r"games? played|undefeated|winless)\b",
+    re.IGNORECASE,
+)
+_H2H_KW = re.compile(
+    r"\b(vs\.?|versus|head.to.head|h2h|played each other|"
+    r"played against|face[ds]?|match.?up)\b",
+    re.IGNORECASE,
+)
+_LEADERBOARD_KW = re.compile(
+    r"\b(who has the most|most (wins|losses|games|viewed|watched|popular)|"
+    r"best record|highest win|top (players?|records?)|"
+    r"winningest|leaderboard|rankings?)\b",
+    re.IGNORECASE,
+)
+
 _ALIAS_STOPWORDS = {
     "a", "an", "and", "ant", "at", "best", "for", "games", "game", "how",
     "i", "in", "is", "it", "me", "more", "of", "on", "or", "record",
@@ -324,6 +343,108 @@ def _get_session(request: Request) -> dict:
         _sessions[sid] = {"mode": "auto"}
 
     return _sessions[sid]
+
+
+# ---------------------------------------------------------------------------
+# Fast DB responses — bypass LLM for simple factual queries
+# ---------------------------------------------------------------------------
+
+
+def _try_fast_db_response(
+    message: str, players: list[str], view_mode: str
+) -> str | None:
+    """Return a formatted markdown response if the query can be answered
+    directly from the database, or None to fall through to the LLM."""
+    from rag.web.db import get_player_stats, get_head_to_head, get_leaderboard
+
+    show_outcome = view_mode == "stats"
+
+    # ── Head-to-head: two players + vs/h2h keywords ──
+    if len(players) == 2 and _H2H_KW.search(message):
+        h2h = get_head_to_head(players[0], players[1])
+        if h2h["total_games"] == 0:
+            return f"**{players[0]}** and **{players[1]}** have never played each other in the database."
+        lines = [
+            f"**{players[0]} vs {players[1]}** — {h2h['total_games']} game{'s' if h2h['total_games'] != 1 else ''} on record:\n",
+        ]
+        if show_outcome:
+            lines.append(f"- **{players[0]}**: {h2h['a_wins']} win{'s' if h2h['a_wins'] != 1 else ''}")
+            lines.append(f"- **{players[1]}**: {h2h['b_wins']} win{'s' if h2h['b_wins'] != 1 else ''}")
+        else:
+            lines.append("Switch to 📊 **Stats** mode to see the win/loss breakdown.")
+        return "\n".join(lines)
+
+    # ── Player stats: one player + stats keywords ──
+    if len(players) >= 1 and _PLAYER_STATS_KW.search(message):
+        results = []
+        for name in players:
+            stats = get_player_stats(name)
+            if not stats:
+                results.append(f"No player named **{name}** found in the database.")
+                continue
+            total = stats["total_games"]
+            if show_outcome:
+                w, l = stats["wins"], stats["losses"]
+                pct = round(100 * w / max(total, 1), 1)
+                results.append(
+                    f"**{stats['name']}** has played **{total} game{'s' if total != 1 else ''}** — "
+                    f"**{w}W–{l}L** ({pct}% win rate)"
+                )
+            else:
+                results.append(
+                    f"**{stats['name']}** has played **{total} game{'s' if total != 1 else ''}**. "
+                    "Switch to 📊 **Stats** mode to see the win/loss breakdown."
+                )
+        return "\n\n".join(results)
+
+    # ── Leaderboards: no specific player + leaderboard keywords ──
+    if not players and _LEADERBOARD_KW.search(message):
+        msg_lower = message.lower()
+
+        if "most viewed" in msg_lower or "most watched" in msg_lower or "most popular" in msg_lower:
+            rows = get_leaderboard("most_viewed", limit=10)
+            if not rows:
+                return "No view count data available."
+            lines = ["**Most Viewed Games:**\n"]
+            for i, r in enumerate(rows, 1):
+                views = f"{r['view_count']:,}"
+                p1, p2 = r["player1_name"], r["player2_name"]
+                vid = r.get("video_id", "")
+                watch_link = f" {{{{watch:{vid}}}}}" if vid else ""
+                lines.append(f"{i}. **{p1} vs {p2}** — {views} views ({r.get('channel_name', '')}){watch_link}")
+            return "\n".join(lines)
+
+        if "most loss" in msg_lower:
+            cat = "most_losses"
+            title = "Most Losses"
+        elif "most games" in msg_lower or "most played" in msg_lower:
+            cat = "most_games"
+            title = "Most Games Played"
+        elif "best record" in msg_lower or "highest win" in msg_lower or "winningest" in msg_lower:
+            cat = "best_record"
+            title = "Best Win Rate (min 3 games)"
+        else:
+            cat = "most_wins"
+            title = "Most Wins"
+
+        rows = get_leaderboard(cat, limit=10)
+        if not rows:
+            return "No player data available."
+        lines = [f"**{title}:**\n"]
+        for i, r in enumerate(rows, 1):
+            if show_outcome:
+                lines.append(
+                    f"{i}. **{r['name']}** — {r['wins']}W–{r['losses']}L"
+                    f" ({r['total_games']} games, {r['win_pct']}%)"
+                )
+            else:
+                if cat == "most_games":
+                    lines.append(f"{i}. **{r['name']}** — {r['total_games']} games")
+                else:
+                    lines.append(f"{i}. **{r['name']}**")
+        return "\n".join(lines)
+
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -590,6 +711,37 @@ async def chat(request: Request):
                 players = _detect_players(message)
                 has_stats = bool(_STATS_KEYWORDS.search(message))
                 has_list = bool(_LIST_KEYWORDS.search(message))
+
+                # ── Fast DB path: answer directly without LLM ──
+                fast = _try_fast_db_response(message, players, view_mode)
+                if fast is not None:
+                    yield f"event: route\ndata: {json.dumps('⚡ db (instant)')}\n\n"
+                    for i in range(0, len(fast), 40):
+                        chunk = fast[i : i + 40]
+                        yield f"event: token\ndata: {json.dumps(chunk)}\n\n"
+                        await asyncio.sleep(0.005)
+                    # Attach source cards for player queries
+                    cards = []
+                    if players:
+                        from rag.web.db import get_player_games
+                        db_games = get_player_games(players, limit=10)
+                        for g in db_games:
+                            vid = g.get("video_id", "")
+                            cards.append({
+                                "player1": g.get("player1_name", ""),
+                                "player2": g.get("player2_name", ""),
+                                "youtube_url": g.get("youtube_url", ""),
+                                "video_id": vid,
+                                "thumbnail_url": f"https://img.youtube.com/vi/{vid}/hqdefault.jpg" if vid else "",
+                                "match_date": g.get("match_date", ""),
+                                "channel": g.get("channel_name", ""),
+                                "views": g.get("view_count"),
+                                "score": 0,
+                                "summary": g.get("title", ""),
+                            })
+                    yield f"event: sources\ndata: {json.dumps(cards)}\n\n"
+                    yield "event: done\ndata: {}\n\n"
+                    return
 
                 if has_list and players:
                     # "Show me all games with X" → direct DB query, skip LLM
