@@ -21,7 +21,14 @@ The goal: **ask natural-language questions about 1v1 basketball** and get answer
 ## Quick Start
 
 ```bash
+# ── Configure ──
+cp .env.example .env
+# Edit .env and set YOUTUBE_API_KEY (required for Phase 2)
+# Get a key at https://console.cloud.google.com/ → APIs & Services → Credentials → YouTube Data API v3
+
 # ── Install dependencies ──
+python -m venv .venv
+source .venv/bin/activate        # Windows: .venv\Scripts\activate
 pip install -r hooprec-ingest/requirements.txt
 pip install -r youtube-ingest/requirements.txt
 pip install -r rag/requirements.txt
