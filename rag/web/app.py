@@ -744,10 +744,17 @@ async def chat(request: Request):
                 engine = _vector_engine
                 route_label = "vector"
             else:
-                # Smart auto-routing: detect player names and stats keywords
-                players = _detect_players(message)
-                has_stats = bool(_STATS_KEYWORDS.search(message))
-                has_list = bool(_LIST_KEYWORDS.search(message))
+                # Controversy queries must be checked before player detection —
+                # common words like "bad" can spuriously match player aliases.
+                if _CONTROVERSY_KW.search(message):
+                    players = []
+                    has_stats = False
+                    has_list = False
+                else:
+                    # Smart auto-routing: detect player names and stats keywords
+                    players = _detect_players(message)
+                    has_stats = bool(_STATS_KEYWORDS.search(message))
+                    has_list = bool(_LIST_KEYWORDS.search(message))
 
                 # ── Fast DB path: answer directly without LLM ──
                 fast = _try_fast_db_response(message, players, view_mode)
