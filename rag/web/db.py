@@ -8,6 +8,7 @@ Also manages watch history and user preferences.
 
 from __future__ import annotations
 
+import re
 import sqlite3
 from datetime import date
 from pathlib import Path
@@ -49,6 +50,12 @@ def ensure_web_tables():
                 UNIQUE(alias, player_name)
             );
         """)
+        # Add ref_controversy_score column if it doesn't exist yet
+        cols = {r[1] for r in conn.execute("PRAGMA table_info(youtube_videos)")}
+        if "ref_controversy_score" not in cols:
+            conn.execute(
+                "ALTER TABLE youtube_videos ADD COLUMN ref_controversy_score INTEGER DEFAULT 0"
+            )
         conn.commit()
     finally:
         conn.close()
@@ -555,6 +562,77 @@ def create_match_from_discovery(
                       player1_score, player2_score, winner_name, loser_name)
 
         return match_row_id
+    finally:
+        conn.close()
+
+
+# ── Ref Controversy ───────────────────────────────────────────
+
+# Keywords in comments that signal ref/officiating complaints.
+# Each match in a comment adds to the video's controversy score.
+_REF_KEYWORDS = re.compile(
+    r"\b(ref|refs|referee|travel(?:ed|ing)?|bad call|bad calls|"
+    r"foul(?:ed)?|phantom|rigged|paid the ref|them calls|"
+    r"that call|these calls|those calls|call was|calls were|"
+    r"tripping|tweaking|corrupt|cheat(?:ing|ed)?)\b",
+    re.IGNORECASE,
+)
+
+
+def backfill_controversy_scores() -> int:
+    """Compute ref_controversy_score for every video from its stored comments.
+
+    Score = number of comments that contain at least one ref-complaint keyword.
+    Only updates videos whose score is currently 0 (or newly added).
+    Returns the count of videos updated.
+    """
+    conn = _connect()
+    try:
+        # Fetch all comments grouped by video
+        rows = conn.execute(
+            "SELECT video_id, text FROM youtube_comments WHERE text IS NOT NULL"
+        ).fetchall()
+
+        scores: dict[str, int] = {}
+        for r in rows:
+            if _REF_KEYWORDS.search(r["text"]):
+                scores[r["video_id"]] = scores.get(r["video_id"], 0) + 1
+
+        updated = 0
+        for video_id, score in scores.items():
+            conn.execute(
+                "UPDATE youtube_videos SET ref_controversy_score = ? WHERE video_id = ?",
+                (score, video_id),
+            )
+            updated += 1
+
+        conn.commit()
+        return updated
+    finally:
+        conn.close()
+
+
+def get_controversy_games(limit: int = 10) -> list[dict]:
+    """Return games with the highest ref controversy scores."""
+    conn = _connect()
+    try:
+        rows = conn.execute(
+            """
+            SELECT
+                m.player1_name, m.player2_name,
+                m.match_date, m.youtube_url,
+                m.youtube_video_id AS video_id,
+                yv.title, yv.channel_name, yv.view_count,
+                yv.ref_controversy_score
+            FROM youtube_videos yv
+            JOIN matches m ON m.youtube_video_id = yv.video_id
+            WHERE yv.ref_controversy_score > 0
+            ORDER BY yv.ref_controversy_score DESC
+            LIMIT ?
+            """,
+            (limit,),
+        ).fetchall()
+        return [dict(r) for r in rows]
     finally:
         conn.close()
 

@@ -68,6 +68,8 @@ STATIC_DIR = WEB_DIR / "static"
 async def lifespan(app: FastAPI):
     ensure_web_tables()
     _load_player_names()          # always — no Ollama needed
+    from rag.web.db import backfill_controversy_scores
+    await asyncio.to_thread(backfill_controversy_scores)
     asyncio.create_task(_warmup_ollama())
     from rag.config import PRELOAD_SUGGESTIONS
     if PRELOAD_SUGGESTIONS:
@@ -138,6 +140,17 @@ _LEADERBOARD_KW = re.compile(
     r"\b(who has the most|most (wins|losses|games|viewed|watched|popular)|"
     r"best record|highest win|top (players?|records?)|"
     r"winningest|leaderboard|rankings?)\b",
+    re.IGNORECASE,
+)
+_CONTROVERSY_KW = re.compile(
+    r"\b(bad (call|calls|ref|refs|reffing)|refs? (mess(?:ed)?|blow|blew|screw(?:ed)?|trippin|tweakin)|"
+    r"controversial (call|calls|ref|game)|blown call|biased ref|"
+    r"refs? made|bad ref(?:ereeing)?|corrupt ref|"
+    r"travel call|phantom (foul|call|timeout)|"
+    r"ref(?:s)? (ruined|cost|cheated|stole)|"
+    r"should.ve been|robbery|robbed|rigged|"
+    r"games? (with|where|that had) (bad|terrible|awful|horrible|trash|the worst) (ref|refs|call|calls|reffing|officiating)|"
+    r"(bad|terrible|awful|horrible|trash|worst) (ref|refs|call|calls|reffing|officiating))\b",
     re.IGNORECASE,
 )
 
@@ -402,6 +415,24 @@ def _try_fast_db_response(
                     "Switch to 📊 **Stats** mode to see the win/loss breakdown."
                 )
         return "\n\n".join(results)
+
+    # ── Ref controversy: no specific player + controversy keywords ──
+    if not players and _CONTROVERSY_KW.search(message):
+        from rag.web.db import get_controversy_games
+        rows = get_controversy_games(limit=10)
+        if not rows:
+            return "No games with notable ref controversy found in the database."
+        lines = ["**Games with the most ref/officiating complaints from fans:**\n"]
+        for i, r in enumerate(rows, 1):
+            p1, p2 = r["player1_name"], r["player2_name"]
+            vid = r.get("video_id", "")
+            score = r.get("ref_controversy_score", 0)
+            watch_link = f" {{{{watch:{vid}}}}}" if vid else ""
+            lines.append(
+                f"{i}. **{p1} vs {p2}** ({r.get('match_date', '')}) "
+                f"— {score} complaint{'s' if score != 1 else ''} in comments{watch_link}"
+            )
+        return "\n".join(lines)
 
     # ── Leaderboards: no specific player + leaderboard keywords ──
     if not players and _LEADERBOARD_KW.search(message):
