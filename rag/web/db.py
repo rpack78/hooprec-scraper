@@ -472,6 +472,97 @@ def get_match_by_video_id(video_id: str) -> dict | None:
         conn.close()
 
 
+def create_match_manual(
+    player1_name: str,
+    player2_name: str,
+    player1_score: int | None,
+    player2_score: int | None,
+    match_date: str | None,
+    youtube_url: str | None = None,
+    notes: str | None = None,
+) -> int:
+    """Insert a match entered manually (no YouTube video required). Returns the row id."""
+    import re as _re
+    from datetime import datetime as _dt
+
+    def _slugify(name: str) -> str:
+        return _re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-")
+
+    date_part = ""
+    if match_date:
+        try:
+            d = _dt.strptime(match_date, "%Y-%m-%d")
+            date_part = f"{d.month}-{d.day}-{d.year}"
+        except ValueError:
+            date_part = _re.sub(r"[^0-9\-]", "", match_date)
+
+    match_id = f"match-{_slugify(player1_name)}-vs-{_slugify(player2_name)}-{date_part}"
+
+    winner_name = None
+    loser_name = None
+    if player1_score is not None and player2_score is not None:
+        if player1_score > player2_score:
+            winner_name = player1_name
+            loser_name = player2_name
+        elif player2_score > player1_score:
+            winner_name = player2_name
+            loser_name = player1_name
+
+    # Extract video_id from URL if provided
+    video_id = None
+    if youtube_url:
+        m = _re.search(r"[?&]v=([^&]+)", youtube_url)
+        if m:
+            video_id = m.group(1)
+        else:
+            m = _re.search(r"youtu\.be/([^?&]+)", youtube_url)
+            if m:
+                video_id = m.group(1)
+
+    conn = _connect()
+    try:
+        conn.execute(
+            """
+            INSERT INTO matches
+                (match_id, detail_url, player1_name, player2_name,
+                 player1_score, player2_score, winner_name, loser_name,
+                 youtube_url, youtube_video_id, match_date, scraped_at)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,datetime('now'))
+            ON CONFLICT(match_id) DO UPDATE SET
+                player1_score = excluded.player1_score,
+                player2_score = excluded.player2_score,
+                winner_name   = excluded.winner_name,
+                loser_name    = excluded.loser_name,
+                match_date    = excluded.match_date
+            """,
+            (
+                match_id,
+                youtube_url or f"manual:{match_id}",
+                player1_name,
+                player2_name,
+                player1_score,
+                player2_score,
+                winner_name,
+                loser_name,
+                youtube_url,
+                video_id,
+                match_date,
+            ),
+        )
+        conn.commit()
+
+        match_row_id = conn.execute(
+            "SELECT id FROM matches WHERE match_id = ?", (match_id,)
+        ).fetchone()["id"]
+
+        _link_players(conn, match_row_id, player1_name, player2_name,
+                      player1_score, player2_score, winner_name, loser_name)
+
+        return match_row_id
+    finally:
+        conn.close()
+
+
 def create_match_from_discovery(
     video_id: str,
     player1_name: str,

@@ -13,6 +13,119 @@ let submittedCount = 0;
 let skippedCount = 0;
 
 // ---------------------------------------------------------------------------
+// Tab Switching
+// ---------------------------------------------------------------------------
+
+function switchTab(tab) {
+    const urlSection = document.getElementById('url-input-section');
+    const manualSection = document.getElementById('manual-input-section');
+    const tabUrl = document.getElementById('tab-url');
+    const tabManual = document.getElementById('tab-manual');
+
+    if (tab === 'url') {
+        urlSection.classList.remove('hidden');
+        manualSection.classList.add('hidden');
+        tabUrl.classList.add('tab-active');
+        tabUrl.classList.remove('text-gray-400', 'hover:text-white');
+        tabManual.classList.remove('tab-active');
+        tabManual.classList.add('text-gray-400', 'hover:text-white');
+    } else {
+        urlSection.classList.add('hidden');
+        manualSection.classList.remove('hidden');
+        tabManual.classList.add('tab-active');
+        tabManual.classList.remove('text-gray-400', 'hover:text-white');
+        tabUrl.classList.remove('tab-active');
+        tabUrl.classList.add('text-gray-400', 'hover:text-white');
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Manual Entry
+// ---------------------------------------------------------------------------
+
+function updateManualWinner() {
+    const p1 = document.getElementById('manual-player1').value || 'Player 1';
+    const p2 = document.getElementById('manual-player2').value || 'Player 2';
+    const s1 = parseInt(document.getElementById('manual-p1score').value);
+    const s2 = parseInt(document.getElementById('manual-p2score').value);
+    const el = document.getElementById('manual-winner');
+
+    if (!isNaN(s1) && !isNaN(s2)) {
+        if (s1 > s2) el.innerHTML = `<span class="text-green-400 font-medium">${escapeHtml(p1)}</span>`;
+        else if (s2 > s1) el.innerHTML = `<span class="text-green-400 font-medium">${escapeHtml(p2)}</span>`;
+        else el.innerHTML = '<span class="text-gray-500">Tie</span>';
+    } else {
+        el.textContent = '—';
+    }
+}
+
+function submitManualForm() {
+    const player1 = document.getElementById('manual-player1').value.trim();
+    const player2 = document.getElementById('manual-player2').value.trim();
+    const status = document.getElementById('manual-status');
+    const btn = document.getElementById('manual-submit-btn');
+
+    if (!player1 || !player2) {
+        status.textContent = 'Player names are required.';
+        status.className = 'text-xs text-red-400';
+        return;
+    }
+
+    btn.disabled = true;
+    status.textContent = 'Saving...';
+    status.className = 'text-xs text-gray-400';
+
+    const payload = {
+        player1_name: player1,
+        player2_name: player2,
+        player1_score: document.getElementById('manual-p1score').value || null,
+        player2_score: document.getElementById('manual-p2score').value || null,
+        match_date: document.getElementById('manual-date').value || null,
+        youtube_url: document.getElementById('manual-url').value.trim() || null,
+        notes: document.getElementById('manual-notes').value.trim() || null,
+    };
+
+    fetch('/api/add/manual', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+    })
+        .then(r => {
+            if (!r.ok) throw new Error(`HTTP ${r.status}`);
+            return r.json();
+        })
+        .then(data => {
+            document.getElementById('manual-input-section').querySelector('.bg-hoop-card').classList.add('hidden');
+            const doneEl = document.getElementById('manual-done');
+            doneEl.classList.remove('hidden');
+            const summary = data.winner
+                ? `${data.player1} vs ${data.player2} — ${data.winner} wins`
+                : `${data.player1} vs ${data.player2}`;
+            document.getElementById('manual-done-summary').textContent = summary + ' added to the database.';
+        })
+        .catch(err => {
+            status.textContent = 'Error: ' + err.message;
+            status.className = 'text-xs text-red-400';
+            btn.disabled = false;
+        });
+}
+
+function resetManualForm() {
+    document.getElementById('manual-player1').value = '';
+    document.getElementById('manual-player2').value = '';
+    document.getElementById('manual-p1score').value = '';
+    document.getElementById('manual-p2score').value = '';
+    document.getElementById('manual-date').value = '';
+    document.getElementById('manual-url').value = '';
+    document.getElementById('manual-notes').value = '';
+    document.getElementById('manual-winner').textContent = '—';
+    document.getElementById('manual-status').textContent = '';
+    document.getElementById('manual-submit-btn').disabled = false;
+    document.getElementById('manual-done').classList.add('hidden');
+    document.getElementById('manual-input-section').querySelector('.bg-hoop-card').classList.remove('hidden');
+}
+
+// ---------------------------------------------------------------------------
 // Check Videos
 // ---------------------------------------------------------------------------
 

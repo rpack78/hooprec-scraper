@@ -1694,6 +1694,59 @@ async def add_submit(request: Request):
     }
 
 
+@app.post("/api/add/manual")
+async def add_manual(request: Request):
+    """Create a match record entered manually (no YouTube processing required)."""
+    from rag.web.db import create_match_manual
+
+    body = await request.json()
+    player1 = body.get("player1_name", "").strip()
+    player2 = body.get("player2_name", "").strip()
+    youtube_url = body.get("youtube_url", "").strip() or None
+
+    if not player1 or not player2:
+        return Response(status_code=400, content="player1_name and player2_name are required")
+
+    p1_score = body.get("player1_score")
+    p2_score = body.get("player2_score")
+    try:
+        p1_score = int(p1_score) if p1_score not in (None, "", "null") else None
+    except (ValueError, TypeError):
+        p1_score = None
+    try:
+        p2_score = int(p2_score) if p2_score not in (None, "", "null") else None
+    except (ValueError, TypeError):
+        p2_score = None
+
+    match_date = body.get("match_date", "").strip() or None
+    notes = body.get("notes", "").strip() or None
+
+    match_row_id = create_match_manual(
+        player1_name=player1,
+        player2_name=player2,
+        player1_score=p1_score,
+        player2_score=p2_score,
+        match_date=match_date,
+        youtube_url=youtube_url,
+        notes=notes,
+    )
+
+    winner = None
+    if p1_score is not None and p2_score is not None:
+        if p1_score > p2_score:
+            winner = player1
+        elif p2_score > p1_score:
+            winner = player2
+
+    return {
+        "status": "ok",
+        "match_row_id": match_row_id,
+        "player1": player1,
+        "player2": player2,
+        "winner": winner,
+    }
+
+
 # ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
